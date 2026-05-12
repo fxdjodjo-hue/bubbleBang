@@ -283,15 +283,6 @@ body {
   -webkit-touch-callout: none;
 }
 
-.touch-pad {
-  display: flex;
-  gap: 14px;
-  padding: 8px;
-  border-radius: 999px;
-  background: rgba(3, 10, 22, 0.22);
-  backdrop-filter: blur(8px);
-}
-
 .touch-button {
   width: 76px;
   height: 76px;
@@ -327,17 +318,76 @@ body {
     inset 0 0 0 1px rgba(255, 255, 255, 0.12);
 }
 
-.move-button::before {
-  font-size: 2.3rem;
-  line-height: 1;
+.touch-joystick {
+  --stick-x: 0px;
+  --stick-y: 0px;
+  width: 138px;
+  height: 138px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
-#touch-left::before {
-  content: "<";
+.joystick-ring {
+  position: relative;
+  width: 122px;
+  height: 122px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at center, rgba(119, 243, 255, 0.08) 0 32%, transparent 33%),
+    radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.12), rgba(4, 16, 34, 0.58));
+  box-shadow:
+    0 14px 34px rgba(0, 0, 0, 0.28),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(10px);
 }
 
-#touch-right::before {
-  content: ">";
+.joystick-ring::before,
+.joystick-ring::after {
+  content: "";
+  position: absolute;
+  inset: 50% 18px auto;
+  height: 2px;
+  transform: translateY(-50%);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.joystick-ring::after {
+  inset: 18px auto;
+  left: 50%;
+  width: 2px;
+  height: auto;
+  transform: translateX(-50%);
+}
+
+.joystick-knob {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 54px;
+  height: 54px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: radial-gradient(circle at 35% 28%, #d8fcff, #77f3ff 48%, #1e4d6b);
+  box-shadow:
+    0 0 26px rgba(119, 243, 255, 0.32),
+    0 10px 22px rgba(0, 0, 0, 0.32);
+  transform: translate(calc(-50% + var(--stick-x)), calc(-50% + var(--stick-y)));
+}
+
+.touch-joystick.active .joystick-ring {
+  border-color: rgba(119, 243, 255, 0.42);
+  box-shadow:
+    0 0 26px rgba(119, 243, 255, 0.26),
+    0 14px 34px rgba(0, 0, 0, 0.28),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 .shoot-button {

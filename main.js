@@ -282,14 +282,13 @@
     constructor(game) {
       this.game = game;
       this.keys = new Set();
-      this.touch = { left: false, right: false, shoot: false };
+      this.touch = { left: false, right: false, move: 0, shoot: false };
       this.pausePressed = false;
       this.confirmPressed = false;
       this.shootPressed = false;
       window.addEventListener("keydown", (event) => this.handleKeyDown(event));
       window.addEventListener("keyup", (event) => this.handleKeyUp(event));
-      this.bindTouchButton("touch-left", "left");
-      this.bindTouchButton("touch-right", "right");
+      this.bindTouchJoystick("touch-joystick", "joystick-knob");
       this.bindTouchButton("touch-shoot", "shoot");
       const touchControls = document.getElementById("touch-controls");
       const blockNativeTouch = (event) => event.preventDefault();
@@ -335,6 +334,75 @@
       button.addEventListener("lostpointercapture", () => setActive(false));
     }
 
+    bindTouchJoystick(id, knobId) {
+      const pad = document.getElementById(id);
+      const knob = document.getElementById(knobId);
+      const maxDistance = 42;
+      const deadZone = 0.16;
+      let activePointerId = null;
+
+      const reset = () => {
+        activePointerId = null;
+        this.touch.move = 0;
+        this.touch.left = false;
+        this.touch.right = false;
+        pad.classList.remove("active");
+        pad.setAttribute("aria-valuenow", "0");
+        pad.style.setProperty("--stick-x", "0px");
+        pad.style.setProperty("--stick-y", "0px");
+      };
+
+      const setFromPointer = (event) => {
+        const rect = pad.getBoundingClientRect();
+        const centerX = rect.left + rect.width * 0.5;
+        const centerY = rect.top + rect.height * 0.5;
+        const rawX = event.clientX - centerX;
+        const rawY = event.clientY - centerY;
+        const distance = Math.hypot(rawX, rawY);
+        const scale = distance > maxDistance ? maxDistance / distance : 1;
+        const stickX = rawX * scale;
+        const stickY = rawY * scale;
+        const analogX = stickX / maxDistance;
+        const move = Math.abs(analogX) < deadZone ? 0 : analogX;
+
+        this.touch.move = move;
+        this.touch.left = move < 0;
+        this.touch.right = move > 0;
+        pad.classList.add("active");
+        pad.setAttribute("aria-valuenow", move.toFixed(2));
+        pad.style.setProperty("--stick-x", `${stickX}px`);
+        pad.style.setProperty("--stick-y", `${stickY}px`);
+      };
+
+      const blockNativeTouch = (event) => event.preventDefault();
+      pad.setAttribute("aria-valuenow", "0");
+      pad.addEventListener("contextmenu", blockNativeTouch);
+      pad.addEventListener("selectstart", blockNativeTouch);
+      pad.addEventListener("dragstart", blockNativeTouch);
+      pad.addEventListener("touchstart", blockNativeTouch, { passive: false });
+      pad.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        activePointerId = event.pointerId;
+        if (pad.setPointerCapture) pad.setPointerCapture(event.pointerId);
+        setFromPointer(event);
+        if (navigator.vibrate) navigator.vibrate(10);
+      });
+      pad.addEventListener("pointermove", (event) => {
+        if (activePointerId !== event.pointerId) return;
+        event.preventDefault();
+        setFromPointer(event);
+      });
+      pad.addEventListener("pointerup", (event) => {
+        if (activePointerId !== event.pointerId) return;
+        event.preventDefault();
+        reset();
+      });
+      pad.addEventListener("pointercancel", reset);
+      pad.addEventListener("lostpointercapture", reset);
+      knob.addEventListener("contextmenu", blockNativeTouch);
+      knob.addEventListener("selectstart", blockNativeTouch);
+    }
+
     handleKeyDown(event) {
       if (isTypingTarget(event.target)) return;
       const key = event.key.toLowerCase();
@@ -355,13 +423,16 @@
     }
 
     consumeFrameActions() {
-      const left = this.keys.has("arrowleft") || this.keys.has("a") || this.touch.left;
-      const right = this.keys.has("arrowright") || this.keys.has("d") || this.touch.right;
+      const keyLeft = this.keys.has("arrowleft") || this.keys.has("a");
+      const keyRight = this.keys.has("arrowright") || this.keys.has("d");
+      const keyboardMove = (keyRight ? 1 : 0) - (keyLeft ? 1 : 0);
+      const left = keyLeft || this.touch.left;
+      const right = keyRight || this.touch.right;
       const shoot = this.keys.has(" ") || this.keys.has("spacebar") || this.touch.shoot;
       const actions = {
         left,
         right,
-        move: (right ? 1 : 0) - (left ? 1 : 0),
+        move: keyboardMove !== 0 ? keyboardMove : this.touch.move,
         shoot,
         shootPressed: this.shootPressed,
         confirm: this.confirmPressed,
