@@ -288,8 +288,8 @@
       this.shootPressed = false;
       window.addEventListener("keydown", (event) => this.handleKeyDown(event));
       window.addEventListener("keyup", (event) => this.handleKeyUp(event));
-      this.bindTouchJoystick("touch-joystick", "joystick-knob");
-      this.bindTouchButton("touch-shoot", "shoot");
+      this.bindTouchMoveZone("touch-move-zone", "touch-stick");
+      this.bindTouchShootZone("touch-shoot-zone");
       const touchControls = document.getElementById("touch-controls");
       const blockNativeTouch = (event) => event.preventDefault();
       touchControls.addEventListener("contextmenu", blockNativeTouch);
@@ -334,11 +334,11 @@
       button.addEventListener("lostpointercapture", () => setActive(false));
     }
 
-    bindTouchJoystick(id, knobId) {
-      const pad = document.getElementById(id);
-      const knob = document.getElementById(knobId);
-      const maxDistance = 42;
-      const deadZone = 0.16;
+    bindTouchMoveZone(id, stickId) {
+      const zone = document.getElementById(id);
+      const stick = document.getElementById(stickId);
+      const maxDistance = 38;
+      const deadZone = 0.14;
       let activePointerId = null;
 
       const reset = () => {
@@ -346,61 +346,93 @@
         this.touch.move = 0;
         this.touch.left = false;
         this.touch.right = false;
-        pad.classList.remove("active");
-        pad.setAttribute("aria-valuenow", "0");
-        pad.style.setProperty("--stick-x", "0px");
-        pad.style.setProperty("--stick-y", "0px");
+        zone.classList.remove("active");
+        zone.setAttribute("aria-valuenow", "0");
+        stick.style.setProperty("--stick-x", "0px");
+        stick.style.setProperty("--stick-y", "0px");
       };
 
       const setFromPointer = (event) => {
-        const rect = pad.getBoundingClientRect();
+        const rect = zone.getBoundingClientRect();
         const centerX = rect.left + rect.width * 0.5;
-        const centerY = rect.top + rect.height * 0.5;
-        const rawX = event.clientX - centerX;
-        const rawY = event.clientY - centerY;
-        const distance = Math.hypot(rawX, rawY);
-        const scale = distance > maxDistance ? maxDistance / distance : 1;
-        const stickX = rawX * scale;
-        const stickY = rawY * scale;
-        const analogX = stickX / maxDistance;
+        const originY = clamp(event.clientY - rect.top, 82, Math.max(82, rect.height - 82));
+        const analogX = clamp((event.clientX - centerX) / (rect.width * 0.5), -1, 1);
         const move = Math.abs(analogX) < deadZone ? 0 : analogX;
+        const stickX = move * maxDistance;
 
         this.touch.move = move;
         this.touch.left = move < 0;
         this.touch.right = move > 0;
-        pad.classList.add("active");
-        pad.setAttribute("aria-valuenow", move.toFixed(2));
-        pad.style.setProperty("--stick-x", `${stickX}px`);
-        pad.style.setProperty("--stick-y", `${stickY}px`);
+        zone.classList.add("active");
+        zone.setAttribute("aria-valuenow", move.toFixed(2));
+        stick.style.setProperty("--stick-origin-x", `${rect.width * 0.5}px`);
+        stick.style.setProperty("--stick-origin-y", `${originY}px`);
+        stick.style.setProperty("--stick-x", `${stickX}px`);
+        stick.style.setProperty("--stick-y", "0px");
       };
 
       const blockNativeTouch = (event) => event.preventDefault();
-      pad.setAttribute("aria-valuenow", "0");
-      pad.addEventListener("contextmenu", blockNativeTouch);
-      pad.addEventListener("selectstart", blockNativeTouch);
-      pad.addEventListener("dragstart", blockNativeTouch);
-      pad.addEventListener("touchstart", blockNativeTouch, { passive: false });
-      pad.addEventListener("pointerdown", (event) => {
+      zone.setAttribute("aria-valuenow", "0");
+      zone.addEventListener("contextmenu", blockNativeTouch);
+      zone.addEventListener("selectstart", blockNativeTouch);
+      zone.addEventListener("dragstart", blockNativeTouch);
+      zone.addEventListener("touchstart", blockNativeTouch, { passive: false });
+      zone.addEventListener("pointerdown", (event) => {
         event.preventDefault();
         activePointerId = event.pointerId;
-        if (pad.setPointerCapture) pad.setPointerCapture(event.pointerId);
+        if (zone.setPointerCapture) zone.setPointerCapture(event.pointerId);
         setFromPointer(event);
         if (navigator.vibrate) navigator.vibrate(10);
       });
-      pad.addEventListener("pointermove", (event) => {
+      zone.addEventListener("pointermove", (event) => {
         if (activePointerId !== event.pointerId) return;
         event.preventDefault();
         setFromPointer(event);
       });
-      pad.addEventListener("pointerup", (event) => {
+      zone.addEventListener("pointerup", (event) => {
         if (activePointerId !== event.pointerId) return;
         event.preventDefault();
         reset();
       });
-      pad.addEventListener("pointercancel", reset);
-      pad.addEventListener("lostpointercapture", reset);
-      knob.addEventListener("contextmenu", blockNativeTouch);
-      knob.addEventListener("selectstart", blockNativeTouch);
+      zone.addEventListener("pointercancel", reset);
+      zone.addEventListener("lostpointercapture", reset);
+      stick.addEventListener("contextmenu", blockNativeTouch);
+      stick.addEventListener("selectstart", blockNativeTouch);
+    }
+
+    bindTouchShootZone(id) {
+      const zone = document.getElementById(id);
+      const activePointers = new Set();
+      const blockNativeTouch = (event) => event.preventDefault();
+      const setActive = (isActive) => {
+        this.touch.shoot = isActive;
+        zone.setAttribute("aria-pressed", isActive ? "true" : "false");
+      };
+
+      zone.addEventListener("contextmenu", blockNativeTouch);
+      zone.addEventListener("selectstart", blockNativeTouch);
+      zone.addEventListener("dragstart", blockNativeTouch);
+      zone.addEventListener("touchstart", blockNativeTouch, { passive: false });
+      zone.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        activePointers.add(event.pointerId);
+        if (zone.setPointerCapture) zone.setPointerCapture(event.pointerId);
+        setActive(true);
+        this.shootPressed = true;
+        if (navigator.vibrate) navigator.vibrate(8);
+      });
+      zone.addEventListener("pointermove", (event) => {
+        if (!activePointers.has(event.pointerId)) return;
+        event.preventDefault();
+      });
+      const release = (event) => {
+        if (event?.preventDefault) event.preventDefault();
+        if (event?.pointerId !== undefined) activePointers.delete(event.pointerId);
+        if (activePointers.size === 0) setActive(false);
+      };
+      zone.addEventListener("pointerup", release);
+      zone.addEventListener("pointercancel", release);
+      zone.addEventListener("lostpointercapture", release);
     }
 
     handleKeyDown(event) {
