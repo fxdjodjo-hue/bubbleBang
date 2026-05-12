@@ -5,10 +5,8 @@
   const HEIGHT = 540;
   const FLOOR_Y = HEIGHT - 58;
   const DEFAULT_SOCKET_SERVER = "https://bubblebang.onrender.com";
-  const MULTIPLAYER_INTERPOLATION_DELAY_MS = 100;
-  const LOCAL_PREDICTION_MAX_MS = 90;
+  const MULTIPLAYER_INTERPOLATION_DELAY_MS = 70;
   const MULTIPLAYER_INPUT_SEND_INTERVAL = 1 / 30;
-  const MULTIPLAYER_PLAYER_SPEED = 360;
   const STATE = {
     MENU: "menu",
     MULTIPLAYER_MENU: "multiplayerMenu",
@@ -164,6 +162,7 @@
   function interpolateSnapshot(previous, next, amount) {
     return {
       ...next,
+      serverTime: lerp(previous.serverTime, next.serverTime, amount),
       players: interpolateById(previous.players || [], next.players || [], amount, (from, to, t) => ({
         ...to,
         x: lerp(from.x, to.x, t),
@@ -807,7 +806,6 @@
       this.multiplayerSnapshot = null;
       this.multiplayerSnapshots = [];
       this.serverClockOffset = null;
-      this.currentMultiplayerInput = { left: false, right: false, shoot: false };
       this.waitingPlayers = [];
       this.lastInputSend = 0;
       this.ping = null;
@@ -993,11 +991,6 @@
     }
 
     updateMultiplayer(dt, actions) {
-      this.currentMultiplayerInput = {
-        left: actions.left,
-        right: actions.right,
-        shoot: actions.shoot,
-      };
       this.lastInputSend += dt;
       if (this.state === STATE.MP_PLAYING && this.lastInputSend >= MULTIPLAYER_INPUT_SEND_INTERVAL) {
         this.lastInputSend = 0;
@@ -1114,7 +1107,7 @@
     getRenderableMultiplayerSnapshot() {
       if (this.multiplayerSnapshots.length === 0) return this.multiplayerSnapshot;
       if (this.multiplayerSnapshots.length === 1 || this.serverClockOffset === null) {
-        return this.applyLocalPrediction(this.multiplayerSnapshots[this.multiplayerSnapshots.length - 1]);
+        return this.multiplayerSnapshots[this.multiplayerSnapshots.length - 1];
       }
 
       const renderTime = Date.now() + this.serverClockOffset - MULTIPLAYER_INTERPOLATION_DELAY_MS;
@@ -1142,40 +1135,7 @@
           )
         : this.multiplayerSnapshots[this.multiplayerSnapshots.length - 1];
 
-      return this.applyLocalPrediction(baseSnapshot);
-    }
-
-    applyLocalPrediction(snapshot) {
-      if (!snapshot || snapshot.gameState !== "playing" || !this.multiplayer.playerId) return snapshot;
-      const players = snapshot.players || [];
-      const localPlayer = players.find((player) => player.id === this.multiplayer.playerId);
-      if (!localPlayer) return snapshot;
-
-      const direction =
-        (this.currentMultiplayerInput.right ? 1 : 0) - (this.currentMultiplayerInput.left ? 1 : 0);
-      if (direction === 0) return snapshot;
-
-      const serverNow = Date.now() + (this.serverClockOffset || 0);
-      const predictionSeconds =
-        clamp(serverNow - snapshot.serverTime, 0, LOCAL_PREDICTION_MAX_MS) / 1000;
-      if (predictionSeconds <= 0) return snapshot;
-
-      return {
-        ...snapshot,
-        players: players.map((player) => {
-          if (player.id !== this.multiplayer.playerId) return player;
-          const width = player.width || 46;
-          return {
-            ...player,
-            x: clamp(
-              player.x + direction * MULTIPLAYER_PLAYER_SPEED * predictionSeconds,
-              14,
-              WIDTH - width - 14
-            ),
-            facing: direction < 0 ? "left" : "right",
-          };
-        }),
-      };
+      return baseSnapshot;
     }
 
     handleMultiplayerDisconnect(message) {
