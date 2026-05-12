@@ -6,9 +6,10 @@
   const FLOOR_Y = HEIGHT - 58;
   const DEFAULT_SOCKET_SERVER = "https://bubblebang.onrender.com";
   const MULTIPLAYER_INTERPOLATION_DELAY_MS = 70;
-  const MULTIPLAYER_INPUT_SEND_INTERVAL = 1 / 30;
-  const LOCAL_PREDICTION_MAX_MS = 120;
-  const LOCAL_RECONCILE_STRENGTH = 0.22;
+  const LOCAL_RECONCILE_DEADBAND = 80;
+  const LOCAL_RECONCILE_SOFTNESS = 0.1;
+  const LOCAL_RECONCILE_IDLE_STRENGTH = 0.38;
+  const LOCAL_RECONCILE_SNAP_DISTANCE = 150;
   const MULTIPLAYER_PLAYER_SPEED = 360;
   const STATE = {
     MENU: "menu",
@@ -812,7 +813,6 @@
       this.currentMultiplayerInput = { left: false, right: false, shoot: false };
       this.localPlayerVisual = null;
       this.waitingPlayers = [];
-      this.lastInputSend = 0;
       this.ping = null;
 
       this.bindMenuButtons();
@@ -1003,9 +1003,7 @@
         right: actions.right,
         shoot: actions.shoot,
       };
-      this.lastInputSend += dt;
-      if (this.state === STATE.MP_PLAYING && this.lastInputSend >= MULTIPLAYER_INPUT_SEND_INTERVAL) {
-        this.lastInputSend = 0;
+      if (this.state === STATE.MP_PLAYING) {
         this.multiplayer.sendInput(actions);
       }
       this.updateHud();
@@ -1180,17 +1178,16 @@
         WIDTH - width - 14
       );
 
-      const serverNow = Date.now() + (this.serverClockOffset || 0);
-      const predictionSeconds =
-        clamp(serverNow - this.multiplayerSnapshot.serverTime, 0, LOCAL_PREDICTION_MAX_MS) / 1000;
-      const targetX = clamp(
-        latestPlayer.x + direction * MULTIPLAYER_PLAYER_SPEED * predictionSeconds,
-        14,
-        WIDTH - width - 14
-      );
-      const correction = targetX - this.localPlayerVisual.x;
-      this.localPlayerVisual.x +=
-        Math.abs(correction) > 90 ? correction : correction * LOCAL_RECONCILE_STRENGTH;
+      const error = latestPlayer.x - this.localPlayerVisual.x;
+      const absError = Math.abs(error);
+      if (absError > LOCAL_RECONCILE_SNAP_DISTANCE) {
+        this.localPlayerVisual.x = latestPlayer.x;
+      } else if (direction === 0) {
+        this.localPlayerVisual.x += error * LOCAL_RECONCILE_IDLE_STRENGTH;
+      } else if (absError > LOCAL_RECONCILE_DEADBAND) {
+        const correction = error - Math.sign(error) * LOCAL_RECONCILE_DEADBAND;
+        this.localPlayerVisual.x += correction * LOCAL_RECONCILE_SOFTNESS;
+      }
       this.localPlayerVisual.y = latestPlayer.y;
 
       return {
