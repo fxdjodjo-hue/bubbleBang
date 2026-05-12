@@ -1,6 +1,6 @@
 "use strict";
 
-const { FLOOR_Y, PLAYER_GRAVITY, PLAYER_JUMP_VY, PLAYER_CEILING_Y } = require("./config");
+const { FLOOR_Y, PLAYER_GRAVITY, PLAYER_CEILING_Y } = require("./config");
 const { rectOverlap } = require("./collision");
 
 function playerBody(player) {
@@ -29,13 +29,9 @@ function playerFeetOnSurface(player, platforms) {
 
 /**
  * Mutates player.y, player.vy, player.onGround. Expects player.vy finite (default 0).
- * input.jumpPressed: edge pulse like shoot.
  */
-function applyPlayerVertical(player, dt, input, platforms) {
+function applyPlayerVertical(player, dt, _input, platforms) {
   const oldY = player.y;
-  if (input.jumpPressed && playerFeetOnSurface(player, platforms)) {
-    player.vy = PLAYER_JUMP_VY;
-  }
   player.vy += PLAYER_GRAVITY * dt;
   player.y += player.vy * dt;
 

@@ -87,6 +87,15 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+#hud-time.warning {
+  color: #ff788a;
+  border-color: rgba(255, 120, 138, 0.48);
+}
+
+.hud-power {
+  color: var(--ui-yellow);
+}
+
 .state-panel {
   position: fixed;
   inset: 0;

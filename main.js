@@ -12,9 +12,17 @@
   const LOCAL_PROJECTILE_SPEED = 760;
   const LOCAL_SHOT_COOLDOWN = 0.3;
   const PLAYER_GRAVITY = 2180;
-  const PLAYER_JUMP_VY = -500;
   const PLAYER_CEILING_Y = 8;
   const MP_PLAYER_Y_SNAP = 72;
+  const LEVEL_TIME_SECONDS = 90;
+  const LEVEL_CLEAR_TIME_BONUS = 10;
+  const MAX_PLAYER_LIVES = 5;
+  const POWERUP_DOUBLE_SHOT = "doubleShot";
+  const POWERUP_HEART = "heart";
+  const POWERUP_DURATION = 12;
+  const POWERUP_DROP_CHANCE = 0.28;
+  const HEART_DROP_CHANCE = 0.18;
+  const POWERUP_FALL_SPEED = 120;
   const STATE = {
     MENU: "menu",
     MULTIPLAYER_MENU: "multiplayerMenu",
@@ -37,7 +45,7 @@
       score: 100,
       color: "#ff5bc8",
       glow: "rgba(255, 91, 200, 0.55)",
-      bounce: 510,
+      bounce: 560,
     },
     medium: {
       radius: 30,
@@ -45,7 +53,7 @@
       score: 200,
       color: "#ffd166",
       glow: "rgba(255, 209, 102, 0.5)",
-      bounce: 455,
+      bounce: 520,
     },
     small: {
       radius: 21,
@@ -53,7 +61,7 @@
       score: 400,
       color: "#77f3ff",
       glow: "rgba(119, 243, 255, 0.52)",
-      bounce: 390,
+      bounce: 470,
     },
     tiny: {
       radius: 14,
@@ -61,7 +69,7 @@
       score: 800,
       color: "#8cff82",
       glow: "rgba(140, 255, 130, 0.48)",
-      bounce: 330,
+      bounce: 410,
     },
   };
 
@@ -164,11 +172,8 @@
     return false;
   }
 
-  function applyPlayerVertical(player, dt, input, platforms) {
+  function applyPlayerVertical(player, dt, _input, platforms) {
     const oldY = player.y;
-    if (input.jumpPressed && playerFeetOnSurface(player, platforms)) {
-      player.vy = PLAYER_JUMP_VY;
-    }
     player.vy += PLAYER_GRAVITY * dt;
     player.y += player.vy * dt;
 
@@ -257,6 +262,12 @@
           height: lerp(from.height, to.height, t),
         })
       ),
+      powerUps: interpolateById(previous.powerUps || [], next.powerUps || [], amount, (from, to, t) => ({
+        ...to,
+        x: lerp(from.x, to.x, t),
+        y: lerp(from.y, to.y, t),
+      })),
+      timeLeft: lerp(previous.timeLeft ?? next.timeLeft ?? LEVEL_TIME_SECONDS, next.timeLeft ?? LEVEL_TIME_SECONDS, amount),
     };
   }
 
@@ -275,7 +286,6 @@
       this.pausePressed = false;
       this.confirmPressed = false;
       this.shootPressed = false;
-      this.jumpPressed = false;
       window.addEventListener("keydown", (event) => this.handleKeyDown(event));
       window.addEventListener("keyup", (event) => this.handleKeyUp(event));
       this.bindTouchButton("touch-left", "left");
@@ -313,12 +323,11 @@
     handleKeyDown(event) {
       if (isTypingTarget(event.target)) return;
       const key = event.key.toLowerCase();
-      if (["arrowleft", "arrowright", " ", "spacebar", "w"].includes(key)) {
+      if (["arrowleft", "arrowright", " ", "spacebar"].includes(key)) {
         event.preventDefault();
       }
       if (!this.keys.has(key)) {
         if (key === " " || key === "spacebar") this.shootPressed = true;
-        if (key === "w") this.jumpPressed = true;
         if (key === "enter") this.confirmPressed = true;
         if (key === "escape" || key === "p") this.pausePressed = true;
       }
@@ -334,20 +343,16 @@
       const left = this.keys.has("arrowleft") || this.keys.has("a") || this.touch.left;
       const right = this.keys.has("arrowright") || this.keys.has("d") || this.touch.right;
       const shoot = this.keys.has(" ") || this.keys.has("spacebar") || this.touch.shoot;
-      const jump = this.keys.has("w");
       const actions = {
         left,
         right,
         move: (right ? 1 : 0) - (left ? 1 : 0),
         shoot,
-        jump,
         shootPressed: this.shootPressed,
-        jumpPressed: this.jumpPressed,
         confirm: this.confirmPressed,
         pause: this.pausePressed,
       };
       this.shootPressed = false;
-      this.jumpPressed = false;
       this.confirmPressed = false;
       this.pausePressed = false;
       return actions;
@@ -508,6 +513,40 @@
     }
   }
 
+  class PowerUp {
+    constructor({ type = POWERUP_DOUBLE_SHOT, x, y }) {
+      this.id = `power-${performance.now()}-${Math.random().toString(16).slice(2)}`;
+      this.type = type;
+      this.x = x - 15;
+      this.y = y - 12;
+      this.width = 30;
+      this.height = 24;
+      this.ttl = 8;
+      this.active = true;
+    }
+
+    get rect() {
+      return {
+        x: this.x,
+        y: this.y,
+        width: this.width,
+        height: this.height,
+      };
+    }
+
+    update(dt) {
+      this.ttl -= dt;
+      if (this.y + this.height < FLOOR_Y) {
+        this.y = Math.min(FLOOR_Y - this.height, this.y + POWERUP_FALL_SPEED * dt);
+      }
+      if (this.ttl <= 0) this.active = false;
+    }
+
+    render(ctx) {
+      renderPowerUpVisual(ctx, this);
+    }
+  }
+
   class Ball {
     constructor({ size, x, y, vx, vy }) {
       const type = BALL_TYPES[size];
@@ -589,8 +628,8 @@
       const leftX = this.safeSplitX(this.x - nextType.radius * 0.55, nextType.radius, playerRect);
       const rightX = this.safeSplitX(this.x + nextType.radius * 0.55, nextType.radius, playerRect);
       return [
-        new Ball({ size: nextSize, x: leftX, y: spawnY, vx: -speed, vy: -nextType.bounce * 0.78 }),
-        new Ball({ size: nextSize, x: rightX, y: spawnY, vx: speed, vy: -nextType.bounce * 0.78 }),
+        new Ball({ size: nextSize, x: leftX, y: spawnY, vx: -speed, vy: -nextType.bounce * 0.88 }),
+        new Ball({ size: nextSize, x: rightX, y: spawnY, vx: speed, vy: -nextType.bounce * 0.88 }),
       ];
     }
 
@@ -666,6 +705,171 @@
         ctx.fill();
       }
       ctx.restore();
+    }
+  }
+
+  class SoundEngine {
+    constructor() {
+      this.context = null;
+      this.master = null;
+      this.musicGain = null;
+      this.musicTimer = null;
+      this.musicStep = 0;
+      this.musicNextTime = 0;
+    }
+
+    ensureContext() {
+      if (this.context) return this.context;
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return null;
+      this.context = new AudioContext();
+      this.master = this.context.createGain();
+      this.master.gain.value = 0.18;
+      this.master.connect(this.context.destination);
+      return this.context;
+    }
+
+    unlock() {
+      const ctx = this.ensureContext();
+      if (ctx && ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
+    }
+
+    startMusic() {
+      const ctx = this.ensureContext();
+      if (!ctx || this.musicTimer) return;
+      this.unlock();
+      this.musicGain = ctx.createGain();
+      this.musicGain.gain.setValueAtTime(0.0001, ctx.currentTime);
+      this.musicGain.gain.exponentialRampToValueAtTime(0.055, ctx.currentTime + 1.4);
+      this.musicGain.connect(this.master);
+      this.musicStep = 0;
+      this.musicNextTime = ctx.currentTime + 0.08;
+      this.scheduleMusic();
+      this.musicTimer = setInterval(() => this.scheduleMusic(), 700);
+    }
+
+    stopMusic() {
+      if (this.musicTimer) {
+        clearInterval(this.musicTimer);
+        this.musicTimer = null;
+      }
+      if (!this.context || !this.musicGain) return;
+      const gain = this.musicGain;
+      const now = this.context.currentTime;
+      gain.gain.cancelScheduledValues(now);
+      gain.gain.setValueAtTime(Math.max(0.0001, gain.gain.value), now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.9);
+      setTimeout(() => {
+        try {
+          gain.disconnect();
+        } catch (_error) {
+          // Already disconnected.
+        }
+      }, 1000);
+      this.musicGain = null;
+    }
+
+    scheduleMusic() {
+      if (!this.context || !this.musicGain) return;
+      const lookAhead = this.context.currentTime + 3.2;
+      const melody = [392, 440, 523.25, 659.25, 587.33, 523.25, 440, 329.63];
+      const bass = [130.81, 146.83, 164.81, 196];
+      while (this.musicNextTime < lookAhead) {
+        const step = this.musicStep;
+        const phrase = Math.floor(step / 8);
+        if (step % 4 === 0) {
+          const root = bass[(step / 4) % bass.length];
+          this.musicPad([root, root * 1.5, root * 2], this.musicNextTime, 3.6);
+        }
+        if ((step + phrase) % 2 === 0) {
+          const note = melody[(step + phrase * 2) % melody.length];
+          this.musicBell(note, this.musicNextTime + 0.06, 1.7);
+        }
+        if (step % 8 === 6) {
+          this.musicBell(melody[(step + 3) % melody.length] * 0.5, this.musicNextTime + 0.24, 2.1, 0.012);
+        }
+        this.musicStep += 1;
+        this.musicNextTime += 0.72;
+      }
+    }
+
+    musicPad(frequencies, start, duration) {
+      for (const frequency of frequencies) {
+        const osc = this.context.createOscillator();
+        const gain = this.context.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(frequency, start);
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.linearRampToValueAtTime(0.012, start + 0.45);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+        osc.connect(gain);
+        gain.connect(this.musicGain);
+        osc.start(start);
+        osc.stop(start + duration + 0.05);
+      }
+    }
+
+    musicBell(frequency, start, duration, volume = 0.018) {
+      const osc = this.context.createOscillator();
+      const gain = this.context.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(frequency, start);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(volume, start + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+      osc.connect(gain);
+      gain.connect(this.musicGain);
+      osc.start(start);
+      osc.stop(start + duration + 0.05);
+    }
+
+    play(name) {
+      const ctx = this.ensureContext();
+      if (!ctx || !this.master) return;
+      if (ctx.state === "suspended") {
+        ctx.resume().catch(() => {});
+      }
+      const now = ctx.currentTime;
+      if (name === "shoot") {
+        this.tone(760, now, 0.075, "square", 0.09, 360);
+      } else if (name === "pop") {
+        this.tone(260, now, 0.1, "triangle", 0.1, 720);
+        this.tone(920, now + 0.025, 0.06, "sine", 0.05, 420);
+      } else if (name === "hurt") {
+        this.tone(180, now, 0.22, "sawtooth", 0.11, 70);
+      } else if (name === "powerup") {
+        this.tone(520, now, 0.08, "triangle", 0.08, 650);
+        this.tone(780, now + 0.08, 0.1, "triangle", 0.08, 1040);
+      } else if (name === "heart") {
+        this.tone(440, now, 0.08, "sine", 0.07, 660);
+        this.tone(660, now + 0.08, 0.12, "sine", 0.07, 880);
+      } else if (name === "clear") {
+        this.tone(520, now, 0.08, "triangle", 0.08);
+        this.tone(660, now + 0.08, 0.08, "triangle", 0.08);
+        this.tone(880, now + 0.16, 0.14, "triangle", 0.08);
+      } else if (name === "timeout") {
+        this.tone(140, now, 0.18, "square", 0.09, 90);
+        this.tone(95, now + 0.18, 0.2, "square", 0.08, 60);
+      }
+    }
+
+    tone(frequency, start, duration, type = "sine", volume = 0.08, endFrequency = null) {
+      const osc = this.context.createOscillator();
+      const gain = this.context.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(frequency, start);
+      if (endFrequency !== null) {
+        osc.frequency.exponentialRampToValueAtTime(Math.max(1, endFrequency), start + duration);
+      }
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(volume, start + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+      osc.connect(gain);
+      gain.connect(this.master);
+      osc.start(start);
+      osc.stop(start + duration + 0.02);
     }
   }
 
@@ -890,7 +1094,6 @@
         right: Boolean(input.right),
         shoot: Boolean(input.shoot),
         shootPressed: Boolean(input.shootPressed),
-        jumpPressed: Boolean(input.jumpPressed),
       };
       if (input.player) {
         payload.x = Math.round(Number(input.player.x) * 100) / 100;
@@ -903,7 +1106,6 @@
         right: payload.right,
         shoot: payload.shoot,
         shootPressed: payload.shootPressed,
-        jumpPressed: payload.jumpPressed,
       });
       const controlsChanged = controlsPayload !== this.lastInputControlsPayload;
       const hasPosition = Number.isFinite(payload.x) && Number.isFinite(payload.y);
@@ -915,7 +1117,7 @@
       const positionDue =
         positionChanged && now - this.lastInputSentAt >= MULTIPLAYER_INPUT_SEND_INTERVAL_MS;
 
-      if (!input.force && !controlsChanged && !payload.shootPressed && !payload.jumpPressed && !positionDue) return;
+      if (!input.force && !controlsChanged && !payload.shootPressed && !positionDue) return;
 
       payload.seq = ++this.inputSequence;
       this.lastInputControlsPayload = controlsPayload;
@@ -956,6 +1158,8 @@
         level: document.getElementById("hud-level"),
         lives: document.getElementById("hud-lives"),
         balls: document.getElementById("hud-balls"),
+        time: document.getElementById("hud-time"),
+        power: document.getElementById("hud-power"),
         score: document.getElementById("hud-score"),
         ping: document.getElementById("hud-ping"),
       };
@@ -980,12 +1184,16 @@
       this.player = new Player();
       this.levelManager = new LevelManager();
       this.particles = new ParticleSystem();
+      this.sound = new SoundEngine();
       this.multiplayer = new SocketClient(this);
       this.balls = [];
-      this.projectile = null;
+      this.projectiles = [];
+      this.powerUps = [];
+      this.playerPowerUps = { [POWERUP_DOUBLE_SHOT]: 0 };
       this.platforms = [];
       this.score = 0;
       this.levelClearBonus = 1500;
+      this.levelTimeLeft = LEVEL_TIME_SECONDS;
       this.shake = 0;
       this.lastTime = 0;
       this.state = STATE.MENU;
@@ -997,6 +1205,7 @@
       this.currentMultiplayerInput = { left: false, right: false, shoot: false };
       this.localPlayerVisual = null;
       this.localProjectiles = [];
+      this.powerUps = [];
       this.previousMultiplayerShoot = false;
       this.localShotCooldown = 0;
       this.networkStats = { rtt: null, transport: "--", snapshotMs: null };
@@ -1018,16 +1227,21 @@
     }
 
     bindMenuButtons() {
-      document.getElementById("single-player-button").addEventListener("click", () => this.startNewRun());
+      document.getElementById("single-player-button").addEventListener("click", () => {
+        this.sound.unlock();
+        this.startNewRun();
+      });
       document.getElementById("multiplayer-button").addEventListener("click", () => this.showMultiplayerMenu());
       document.getElementById("back-menu-button").addEventListener("click", () => this.showMainMenu());
       document.getElementById("create-room-button").addEventListener("click", () => {
+        this.sound.unlock();
         document.activeElement?.blur();
         this.setMultiplayerStatus("Connecting...");
         this.multiplayer.setServerUrl(this.ui.socketUrlInput.value);
         this.multiplayer.createRoom(this.ui.nicknameInput.value);
       });
       document.getElementById("join-room-button").addEventListener("click", () => {
+        this.sound.unlock();
         document.activeElement?.blur();
         this.setMultiplayerStatus("Connecting...");
         this.multiplayer.setServerUrl(this.ui.socketUrlInput.value);
@@ -1068,6 +1282,7 @@
       const actions = this.input.consumeFrameActions();
       this.handleGlobalInput(actions);
       this.update(dt, actions);
+      this.syncMusicState();
       this.render();
       requestAnimationFrame((nextTime) => this.loop(nextTime));
     }
@@ -1079,8 +1294,10 @@
       if (!actions.confirm) return;
 
       if (this.state === STATE.MENU) {
+        this.sound.unlock();
         this.startNewRun();
       } else if (this.state === STATE.GAME_OVER || this.state === STATE.DEMO_COMPLETE) {
+        this.sound.unlock();
         this.startNewRun();
       } else if (this.state === STATE.LEVEL_COMPLETE) {
         this.advanceLevel();
@@ -1098,6 +1315,21 @@
       this.updateOverlay();
     }
 
+    syncMusicState() {
+      const shouldPlay = [
+        STATE.PLAYING,
+        STATE.LEVEL_COMPLETE,
+        STATE.MP_COUNTDOWN,
+        STATE.MP_PLAYING,
+        STATE.MP_LEVEL_COMPLETE,
+      ].includes(this.state);
+      if (shouldPlay) {
+        this.sound.startMusic();
+      } else {
+        this.sound.stopMusic();
+      }
+    }
+
     showMainMenu(message = "") {
       this.mode = "single";
       this.state = STATE.MENU;
@@ -1107,6 +1339,7 @@
       this.serverClockOffset = null;
       this.localPlayerVisual = null;
       this.localProjectiles = [];
+      this.powerUps = [];
       this.previousMultiplayerShoot = false;
       this.localShotCooldown = 0;
       this.prevMultiplayerRenderX.clear();
@@ -1123,6 +1356,7 @@
       this.serverClockOffset = null;
       this.localPlayerVisual = null;
       this.localProjectiles = [];
+      this.powerUps = [];
       this.previousMultiplayerShoot = false;
       this.localShotCooldown = 0;
       this.prevMultiplayerRenderX.clear();
@@ -1134,6 +1368,7 @@
       this.mode = "single";
       this.score = 0;
       this.player.resetForRun();
+      this.playerPowerUps = { [POWERUP_DOUBLE_SHOT]: 0 };
       this.levelManager.reset();
       this.loadCurrentLevel();
       this.state = STATE.PLAYING;
@@ -1142,12 +1377,13 @@
 
     loadCurrentLevel() {
       const level = this.levelManager.current;
-      this.player.lives = 3;
       this.player.resetPosition();
       this.player.invulnerable = 1.2;
-      this.projectile = null;
+      this.projectiles = [];
+      this.powerUps = [];
       this.platforms = level.platforms.map((platform) => ({ ...platform }));
       this.balls = level.balls.map((ball) => new Ball(ball));
+      this.levelTimeLeft = LEVEL_TIME_SECONDS;
       this.particles.particles = [];
       this.shake = 0;
       this.updateHud();
@@ -1179,20 +1415,30 @@
       }
 
       this.player.update(dt, actions, this.platforms);
-
-      if ((actions.shoot || actions.shootPressed) && !this.projectile) {
-        this.projectile = new Projectile(this.player.shootX, this.player.y + 14);
-        this.playSoundCue("shoot");
+      this.updatePowerUpTimers(dt);
+      if (this.updateLevelTimer(dt)) {
+        this.updateHud();
+        return;
       }
 
-      if (this.projectile) {
-        this.projectile.update(dt, this.platforms);
-        if (!this.projectile.active) this.projectile = null;
+      if (actions.shoot || actions.shootPressed) {
+        this.trySpawnPlayerProjectile();
       }
+
+      for (const projectile of this.projectiles) {
+        projectile.update(dt, this.platforms);
+      }
+      this.projectiles = this.projectiles.filter((projectile) => projectile.active);
 
       for (const ball of this.balls) {
         ball.update(dt, this.platforms);
       }
+
+      for (const powerUp of this.powerUps) {
+        powerUp.update(dt);
+      }
+      this.handlePowerUpCollections();
+      this.powerUps = this.powerUps.filter((powerUp) => powerUp.active);
 
       this.handleProjectileCollisions();
       this.handlePlayerCollisions();
@@ -1200,12 +1446,99 @@
       this.updateHud();
     }
 
+    updatePowerUpTimers(dt) {
+      for (const key of Object.keys(this.playerPowerUps)) {
+        this.playerPowerUps[key] = Math.max(0, this.playerPowerUps[key] - dt);
+      }
+    }
+
+    updateLevelTimer(dt) {
+      this.levelTimeLeft = Math.max(0, this.levelTimeLeft - dt);
+      if (this.levelTimeLeft > 0) return false;
+      this.handleLevelTimeout();
+      return true;
+    }
+
+    handleLevelTimeout() {
+      this.player.lives = Math.max(0, this.player.lives - 1);
+      this.clearPlayerPowerUps();
+      this.projectiles = [];
+      this.powerUps = [];
+      this.playSoundCue("timeout");
+      if (this.player.lives <= 0) {
+        this.shake = 10;
+        this.particles.burst(this.player.shootX, this.player.y + 25, "#ffd166", 28);
+        this.state = STATE.GAME_OVER;
+        this.updateOverlay();
+        return;
+      }
+      this.loadCurrentLevel();
+      this.shake = 10;
+      this.particles.burst(this.player.shootX, this.player.y + 25, "#ffd166", 28);
+    }
+
+    clearPlayerPowerUps() {
+      this.playerPowerUps = { [POWERUP_DOUBLE_SHOT]: 0 };
+    }
+
+    getMaxPlayerProjectiles() {
+      return this.playerPowerUps[POWERUP_DOUBLE_SHOT] > 0 ? 2 : 1;
+    }
+
+    trySpawnPlayerProjectile() {
+      const maxProjectiles = this.getMaxPlayerProjectiles();
+      if (this.projectiles.length >= maxProjectiles) return;
+      const laneOffset = maxProjectiles > 1 ? (this.projectiles.length % 2 === 0 ? -8 : 8) : 0;
+      this.projectiles.push(new Projectile(this.player.shootX + laneOffset, this.player.y + 14));
+      this.playSoundCue("shoot");
+    }
+
+    maybeDropPowerUp(ball) {
+      if (ball.size === "tiny" || this.powerUps.length >= 2) return;
+      const candidates = [];
+      if (this.player.lives < MAX_PLAYER_LIVES) {
+        candidates.push({ type: POWERUP_HEART, chance: HEART_DROP_CHANCE });
+      }
+      if (this.playerPowerUps[POWERUP_DOUBLE_SHOT] <= 0) {
+        candidates.push({ type: POWERUP_DOUBLE_SHOT, chance: POWERUP_DROP_CHANCE });
+      }
+      const totalChance = candidates.reduce((sum, candidate) => sum + candidate.chance, 0);
+      let roll = Math.random();
+      if (roll > totalChance) return;
+      for (const candidate of candidates) {
+        if (roll <= candidate.chance) {
+          this.powerUps.push(new PowerUp({ type: candidate.type, x: ball.x, y: ball.y }));
+          return;
+        }
+        roll -= candidate.chance;
+      }
+    }
+
+    handlePowerUpCollections() {
+      for (const powerUp of this.powerUps) {
+        if (!powerUp.active || !rectOverlap(powerUp.rect, this.player.rect)) continue;
+        powerUp.active = false;
+        const pickupX = powerUp.x + powerUp.width * 0.5;
+        const pickupY = powerUp.y + powerUp.height * 0.5;
+        if (powerUp.type === POWERUP_HEART) {
+          this.player.lives = Math.min(MAX_PLAYER_LIVES, this.player.lives + 1);
+          this.score += 300;
+          this.particles.burst(pickupX, pickupY, "#ff788a", 22);
+          this.playSoundCue("heart");
+        } else {
+          this.playerPowerUps[powerUp.type] = POWERUP_DURATION;
+          this.score += 250;
+          this.particles.burst(pickupX, pickupY, "#ffd166", 18);
+          this.playSoundCue("powerup");
+        }
+      }
+    }
+
     updateMultiplayer(dt, actions) {
       this.currentMultiplayerInput = {
         left: actions.left,
         right: actions.right,
         shoot: actions.shoot,
-        jump: actions.jump,
       };
       this.localShotCooldown = Math.max(0, this.localShotCooldown - dt);
       this.updateLocalPlayerControl(dt, actions);
@@ -1248,10 +1581,7 @@
         WIDTH - width - 14
       );
       const platforms = this.multiplayerSnapshot?.platforms || [];
-      const jumpInput = {
-        jumpPressed: Boolean(actions.jumpPressed),
-      };
-      applyPlayerVertical(this.localPlayerVisual, dt, jumpInput, platforms);
+      applyPlayerVertical(this.localPlayerVisual, dt, {}, platforms);
       const serverY = latestPlayer.y;
       if (Math.abs(this.localPlayerVisual.y - serverY) > MP_PLAYER_Y_SNAP) {
         this.localPlayerVisual.y = serverY;
@@ -1259,6 +1589,7 @@
       }
       this.localPlayerVisual.width = width;
       this.localPlayerVisual.height = height;
+      this.localPlayerVisual.powerUps = { ...(latestPlayer.powerUps || {}) };
       if (direction !== 0) {
         this.localPlayerVisual.facing = direction < 0 ? "left" : "right";
         this.localPlayerVisual.lastMovedAt = performance.now();
@@ -1301,6 +1632,7 @@
         height: player.height || 58,
         vy: Number(player.vy) || 0,
         onGround: player.onGround !== false,
+        powerUps: { ...(player.powerUps || {}) },
         facing: player.facing || "right",
         lastMovedAt: 0,
       };
@@ -1327,46 +1659,50 @@
     }
 
     spawnLocalProjectile() {
-      const hasLocalProjectile = this.localProjectiles.some(
-        (projectile) => projectile.ownerId === this.multiplayer.playerId
-      );
-      const hasServerProjectile = this.multiplayerSnapshot?.projectiles?.some(
-        (projectile) => projectile.ownerId === this.multiplayer.playerId
-      );
-      if (hasLocalProjectile || hasServerProjectile) return;
-
       const player = this.localPlayerVisual || this.multiplayerSnapshot?.players?.find(
         (candidate) => candidate.id === this.multiplayer.playerId
       );
       if (!player) return;
+      const maxProjectiles = player.powerUps?.[POWERUP_DOUBLE_SHOT] > 0 ? 2 : 1;
+      const localCount = this.localProjectiles.filter(
+        (projectile) => projectile.ownerId === this.multiplayer.playerId
+      ).length;
+      const serverCount =
+        this.multiplayerSnapshot?.projectiles?.filter(
+          (projectile) => projectile.ownerId === this.multiplayer.playerId
+        ).length || 0;
+      const ownedCount = localCount + serverCount;
+      if (ownedCount >= maxProjectiles) return;
       const width = player.width || 46;
-      this.localProjectiles = [
-        {
-          id: `local-${performance.now()}`,
-          ownerId: this.multiplayer.playerId,
-          x: player.x + width * 0.5,
-          y: player.y + 14,
-          originY: player.y + 14,
-          height: 0,
-        },
-      ];
+      const laneOffset = maxProjectiles > 1 ? (ownedCount % 2 === 0 ? -8 : 8) : 0;
+      this.localProjectiles.push({
+        id: `local-${performance.now()}`,
+        ownerId: this.multiplayer.playerId,
+        x: player.x + width * 0.5 + laneOffset,
+        y: player.y + 14,
+        originY: player.y + 14,
+        height: 0,
+      });
       this.localShotCooldown = LOCAL_SHOT_COOLDOWN;
     }
 
     handleProjectileCollisions() {
-      if (!this.projectile) return;
-      for (let i = this.balls.length - 1; i >= 0; i -= 1) {
-        const ball = this.balls[i];
-        if (!lineCircleOverlap(this.projectile.rect, ball)) continue;
-        ball.hitFlash = 0.12;
-        this.score += ball.type.score;
-        this.particles.burst(ball.x, ball.y, ball.type.color, ball.size === "tiny" ? 16 : 24);
-        this.shake = ball.size === "large" ? 8 : 5;
-        this.playSoundCue("pop");
-        const splitBalls = ball.split(this.player.rect);
-        this.balls.splice(i, 1, ...splitBalls);
-        this.projectile = null;
-        return;
+      for (let projectileIndex = this.projectiles.length - 1; projectileIndex >= 0; projectileIndex -= 1) {
+        const projectile = this.projectiles[projectileIndex];
+        for (let ballIndex = this.balls.length - 1; ballIndex >= 0; ballIndex -= 1) {
+          const ball = this.balls[ballIndex];
+          if (!lineCircleOverlap(projectile.rect, ball)) continue;
+          ball.hitFlash = 0.12;
+          this.score += ball.type.score;
+          this.particles.burst(ball.x, ball.y, ball.type.color, ball.size === "tiny" ? 16 : 24);
+          this.shake = ball.size === "large" ? 8 : 5;
+          this.playSoundCue("pop");
+          this.maybeDropPowerUp(ball);
+          const splitBalls = ball.split(this.player.rect);
+          this.balls.splice(ballIndex, 1, ...splitBalls);
+          this.projectiles.splice(projectileIndex, 1);
+          return;
+        }
       }
     }
 
@@ -1375,6 +1711,9 @@
       for (const ball of this.balls) {
         if (!circleRectOverlap(ball, playerRect)) continue;
         if (!this.player.takeHit()) return;
+        this.clearPlayerPowerUps();
+        this.projectiles = [];
+        this.powerUps = [];
         this.shake = 10;
         this.particles.burst(this.player.shootX, this.player.y + 25, "#f8fbff", 26);
         this.playSoundCue("hurt");
@@ -1388,15 +1727,19 @@
 
     checkLevelClear() {
       if (this.balls.length > 0) return;
-      this.score += this.levelClearBonus + this.levelManager.currentNumber * 250;
-      this.projectile = null;
+      this.score +=
+        this.levelClearBonus +
+        this.levelManager.currentNumber * 250 +
+        Math.ceil(this.levelTimeLeft) * LEVEL_CLEAR_TIME_BONUS;
+      this.projectiles = [];
+      this.powerUps = [];
       this.state = STATE.LEVEL_COMPLETE;
+      this.playSoundCue("clear");
       this.updateOverlay();
     }
 
     playSoundCue(name) {
-      // Placeholder hook for future WebAudio clips.
-      this.lastSoundCue = name;
+      this.sound.play(name);
     }
 
     handleRoomJoined(roomCode, message) {
@@ -1479,6 +1822,7 @@
           const color = event.color || BALL_TYPES[event.size]?.color || "#77f3ff";
           this.particles.burst(event.x, event.y, color, event.size === "tiny" ? 16 : 24);
           this.shake = event.size === "large" ? 8 : 5;
+          this.playSoundCue("pop");
           if (event.ownerId) {
             this.localProjectiles = this.localProjectiles.filter(
               (projectile) => projectile.ownerId !== event.ownerId
@@ -1487,6 +1831,16 @@
         } else if (event.type === "player_hit") {
           this.particles.burst(event.x, event.y, "#f8fbff", 26);
           this.shake = 10;
+          this.playSoundCue("hurt");
+        } else if (event.type === "power_up") {
+          const isHeart = event.powerUp === POWERUP_HEART;
+          this.particles.burst(event.x, event.y, isHeart ? "#ff788a" : "#ffd166", isHeart ? 22 : 18);
+          this.playSoundCue(isHeart ? "heart" : "powerup");
+        } else if (event.type === "timer_expired") {
+          this.shake = 10;
+          this.playSoundCue("timeout");
+        } else if (event.type === "shoot") {
+          this.playSoundCue("shoot");
         }
       }
     }
@@ -1597,9 +1951,16 @@
     updateHud() {
       if (isMultiplayerState(this.state) && this.multiplayerSnapshot) {
         const snapshot = this.multiplayerSnapshot;
+        const localPlayer = snapshot.players?.find((player) => player.id === this.multiplayer.playerId);
+        const doubleTime = Math.ceil(localPlayer?.powerUps?.[POWERUP_DOUBLE_SHOT] || 0);
+        const timeLeft = Math.ceil(snapshot.timeLeft ?? LEVEL_TIME_SECONDS);
         this.hud.level.textContent = `Room ${snapshot.roomCode} - L${snapshot.level}`;
-        this.hud.lives.textContent = `Team Lives ${Math.max(0, snapshot.teamLives)}`;
+        this.hud.lives.textContent = `Team Lives ${Math.max(0, snapshot.teamLives)}/${snapshot.teamMaxLives || MAX_PLAYER_LIVES}`;
+        this.hud.time.textContent = `Time ${timeLeft}`;
         this.hud.balls.textContent = `Balls ${snapshot.balls.length}`;
+        this.hud.power.textContent = `Double ${doubleTime}`;
+        this.hud.power.classList.toggle("hidden", doubleTime <= 0);
+        this.hud.time.classList.toggle("warning", timeLeft <= 10 && snapshot.gameState === "playing");
         this.hud.score.textContent = snapshot.score.toString().padStart(6, "0");
         const rtt = this.networkStats.rtt === null ? "--" : `${this.networkStats.rtt}ms`;
         const snapshotMs = this.networkStats.snapshotMs === null ? "--" : `${this.networkStats.snapshotMs}ms`;
@@ -1607,9 +1968,15 @@
         return;
       }
 
+      const doubleTime = Math.ceil(this.playerPowerUps[POWERUP_DOUBLE_SHOT] || 0);
+      const timeLeft = Math.ceil(this.levelTimeLeft);
       this.hud.level.textContent = `Level ${this.levelManager.currentNumber}`;
-      this.hud.lives.textContent = `Lives ${Math.max(0, this.player.lives)}`;
+      this.hud.lives.textContent = `Lives ${Math.max(0, this.player.lives)}/${MAX_PLAYER_LIVES}`;
+      this.hud.time.textContent = `Time ${timeLeft}`;
       this.hud.balls.textContent = `Balls ${this.balls.length}`;
+      this.hud.power.textContent = `Double ${doubleTime}`;
+      this.hud.power.classList.toggle("hidden", doubleTime <= 0);
+      this.hud.time.classList.toggle("warning", timeLeft <= 10 && this.state === STATE.PLAYING);
       this.hud.score.textContent = this.score.toString().padStart(6, "0");
       this.hud.ping.textContent = "Ping --";
     }
@@ -1618,7 +1985,7 @@
       let visible = true;
       let title = "Bubble Bang MVP";
       let subtitle = this.multiplayerStatus || "Choose a mode";
-      let controls = "Move: A/D or Arrows — Jump: W — Shoot: Space — Pause: Esc/P";
+      let controls = "Move: A/D or Arrows - Shoot: Space - Pause: Esc/P";
       const snapshot = this.multiplayerSnapshot;
 
       if (this.state === STATE.PLAYING || this.state === STATE.MP_PLAYING) {
@@ -1735,12 +2102,17 @@
       for (const platform of this.platforms) {
         this.renderPlatform(ctx, platform);
       }
-      this.projectile?.render(ctx);
+      for (const projectile of this.projectiles) {
+        projectile.render(ctx);
+      }
       for (const ball of this.balls) {
         ball.render(ctx);
       }
+      for (const powerUp of this.powerUps) {
+        powerUp.render(ctx);
+      }
       this.player.render(ctx, {
-        projectile: this.projectile,
+        projectile: this.projectiles.length > 0,
         pose:
           this.state === STATE.LEVEL_COMPLETE || this.state === STATE.DEMO_COMPLETE
             ? "victory"
@@ -1756,6 +2128,7 @@
       const projectiles = snapshot?.projectiles || [];
       const balls = snapshot?.balls || [];
       const players = snapshot?.players || [];
+      const powerUps = snapshot?.powerUps || [];
       const pose =
         snapshot?.gameState === "levelComplete"
           ? "victory"
@@ -1776,6 +2149,9 @@
       }
       for (const ball of balls) {
         renderBallVisual(ctx, ball, 0, 0);
+      }
+      for (const powerUp of powerUps) {
+        renderPowerUpVisual(ctx, powerUp);
       }
       for (const player of players) {
         const isLocal = player.id === this.multiplayer.playerId;
@@ -1922,6 +2298,42 @@
     ctx.lineTo(x, top);
     ctx.lineTo(x + 9, top + 10);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  function renderPowerUpVisual(ctx, powerUp) {
+    const width = powerUp.width || 30;
+    const height = powerUp.height || 24;
+    ctx.save();
+    ctx.translate(powerUp.x, powerUp.y);
+    const isHeart = powerUp.type === POWERUP_HEART;
+    ctx.shadowColor = isHeart ? "rgba(255, 120, 138, 0.72)" : "rgba(255, 209, 102, 0.72)";
+    ctx.shadowBlur = 18;
+    const gradient = ctx.createLinearGradient(0, 0, 0, height);
+    gradient.addColorStop(0, isHeart ? "#ffd1dc" : "#fff4a8");
+    gradient.addColorStop(1, isHeart ? "#ff4f78" : "#ff9f43");
+    ctx.fillStyle = gradient;
+    roundRect(ctx, 0, 0, width, height, 7);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.78)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    if (isHeart) {
+      ctx.fillStyle = "#fff4f7";
+      ctx.beginPath();
+      ctx.moveTo(width * 0.5, height * 0.75);
+      ctx.bezierCurveTo(width * 0.15, height * 0.5, width * 0.18, height * 0.17, width * 0.38, height * 0.24);
+      ctx.bezierCurveTo(width * 0.46, height * 0.27, width * 0.5, height * 0.36, width * 0.5, height * 0.36);
+      ctx.bezierCurveTo(width * 0.5, height * 0.36, width * 0.54, height * 0.27, width * 0.62, height * 0.24);
+      ctx.bezierCurveTo(width * 0.82, height * 0.17, width * 0.85, height * 0.5, width * 0.5, height * 0.75);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = "#07111f";
+      roundRect(ctx, width * 0.32, 5, 4, height - 10, 2);
+      ctx.fill();
+      roundRect(ctx, width * 0.58, 5, 4, height - 10, 2);
+      ctx.fill();
+    }
     ctx.restore();
   }
 

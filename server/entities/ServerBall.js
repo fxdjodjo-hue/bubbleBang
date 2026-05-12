@@ -84,14 +84,14 @@ class ServerBall {
         x: leftX,
         y: spawnY,
         vx: -speed,
-        vy: -nextType.bounce * 0.78,
+        vy: -nextType.bounce * 0.88,
       }),
       new ServerBall(createId(), {
         size: nextSize,
         x: rightX,
         y: spawnY,
         vx: speed,
-        vy: -nextType.bounce * 0.78,
+        vy: -nextType.bounce * 0.88,
       }),
     ];
   }

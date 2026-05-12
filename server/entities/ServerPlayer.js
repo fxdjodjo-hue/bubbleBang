@@ -9,6 +9,7 @@ const {
   CLIENT_POSITION_TOLERANCE,
   CLIENT_POSITION_STALE_MS,
   SHOOT_COOLDOWN,
+  POWERUP_DOUBLE_SHOT,
 } = require("../config");
 const { clamp, rectOverlap } = require("../collision");
 const { applyPlayerVertical } = require("../playerVertical");
@@ -23,12 +24,13 @@ class ServerPlayer {
     this.speed = PLAYER_SPEED;
     this.vy = 0;
     this.onGround = true;
-    this.input = { left: false, right: false, shoot: false, shootPressed: false, jumpPressed: false };
+    this.input = { left: false, right: false, shoot: false, shootPressed: false };
     this.connected = true;
     this.facing = slot === 0 ? "right" : "left";
     this.invulnerable = 1.2;
     this.hitCooldown = 0;
     this.shootCooldown = 0;
+    this.powerUps = { [POWERUP_DOUBLE_SHOT]: 0 };
     this.lastClientPositionAt = 0;
     this.clientPositionActiveUntil = 0;
     this.lastInputSeq = 0;
@@ -64,13 +66,11 @@ class ServerPlayer {
 
   setInput(input) {
     const shootPressed = Boolean(input && input.shootPressed);
-    const jumpPressed = Boolean(input && input.jumpPressed);
     this.input = {
       left: Boolean(input && input.left),
       right: Boolean(input && input.right),
       shoot: Boolean(input && input.shoot),
       shootPressed: this.input.shootPressed || shootPressed,
-      jumpPressed: this.input.jumpPressed || jumpPressed,
     };
 
     if (Number.isFinite(input?.seq)) {
@@ -87,6 +87,7 @@ class ServerPlayer {
     this.invulnerable = Math.max(0, this.invulnerable - dt);
     this.hitCooldown = Math.max(0, this.hitCooldown - dt);
     this.shootCooldown = Math.max(0, this.shootCooldown - dt);
+    this.updatePowerUps(dt);
 
     const direction = (this.input.right ? 1 : 0) - (this.input.left ? 1 : 0);
     if (direction < 0) this.facing = "left";
@@ -107,8 +108,6 @@ class ServerPlayer {
     }
 
     applyPlayerVertical(this, dt, this.input, platforms);
-    this.input.jumpPressed = false;
-
     if (!useClientX) {
       const playerRect = this.rect;
       const oldX = this.x;
@@ -146,6 +145,10 @@ class ServerPlayer {
     return this.shootCooldown <= 0;
   }
 
+  get maxProjectiles() {
+    return this.powerUps[POWERUP_DOUBLE_SHOT] > 0 ? 2 : 1;
+  }
+
   markShot() {
     this.shootCooldown = SHOOT_COOLDOWN;
   }
@@ -158,7 +161,23 @@ class ServerPlayer {
     if (this.invulnerable > 0 || this.hitCooldown > 0) return false;
     this.invulnerable = 1.7;
     this.hitCooldown = 0.3;
+    this.resetPowerUps();
     return true;
+  }
+
+  activatePowerUp(type, duration) {
+    if (!Object.prototype.hasOwnProperty.call(this.powerUps, type)) return;
+    this.powerUps[type] = duration;
+  }
+
+  resetPowerUps() {
+    this.powerUps = { [POWERUP_DOUBLE_SHOT]: 0 };
+  }
+
+  updatePowerUps(dt) {
+    for (const key of Object.keys(this.powerUps)) {
+      this.powerUps[key] = Math.max(0, this.powerUps[key] - dt);
+    }
   }
 
   snapshot() {
@@ -173,6 +192,7 @@ class ServerPlayer {
       onGround: this.onGround,
       facing: this.facing,
       isShooting: this.shootCooldown > SHOOT_COOLDOWN - 0.12,
+      powerUps: { ...this.powerUps },
       invulnerable: this.invulnerable > 0,
       invulnerableTime: this.invulnerable,
       connected: this.connected,

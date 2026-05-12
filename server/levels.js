@@ -6,28 +6,28 @@ const BALL_TYPES = {
     next: "medium",
     score: 100,
     color: "#ff5bc8",
-    bounce: 510,
+    bounce: 560,
   },
   medium: {
     radius: 30,
     next: "small",
     score: 200,
     color: "#ffd166",
-    bounce: 455,
+    bounce: 520,
   },
   small: {
     radius: 21,
     next: "tiny",
     score: 400,
     color: "#77f3ff",
-    bounce: 390,
+    bounce: 470,
   },
   tiny: {
     radius: 14,
     next: null,
     score: 800,
     color: "#8cff82",
-    bounce: 330,
+    bounce: 410,
   },
 };
 

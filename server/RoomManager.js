@@ -75,7 +75,6 @@ class RoomManager {
       right: Boolean(input && input.right),
       shoot: Boolean(input && input.shoot),
       shootPressed: Boolean(input && input.shootPressed),
-      jumpPressed: Boolean(input && input.jumpPressed),
       x: input && input.x,
       y: input && input.y,
       seq: input && input.seq,
