@@ -11,6 +11,7 @@
 
 * {
   box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
 }
 
 html,
@@ -22,6 +23,8 @@ body {
   background: #07111f;
   touch-action: none;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 body {
@@ -274,44 +277,86 @@ body {
   align-items: flex-end;
   justify-content: space-between;
   pointer-events: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .touch-pad {
   display: flex;
-  gap: 12px;
+  gap: 14px;
+  padding: 8px;
+  border-radius: 999px;
+  background: rgba(3, 10, 22, 0.22);
+  backdrop-filter: blur(8px);
 }
 
 .touch-button {
-  min-width: 64px;
-  min-height: 64px;
+  width: 76px;
+  height: 76px;
+  display: grid;
+  place-items: center;
   border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 8px;
+  border-radius: 999px;
   color: white;
-  background: rgba(4, 16, 34, 0.68);
+  background: radial-gradient(circle at 35% 28%, rgba(255, 255, 255, 0.16), rgba(4, 16, 34, 0.72));
   box-shadow:
     0 12px 30px rgba(0, 0, 0, 0.28),
     inset 0 0 0 1px rgba(255, 255, 255, 0.05);
   backdrop-filter: blur(10px);
-  font-size: 1.45rem;
+  font-size: 0;
   font-weight: 900;
   pointer-events: auto;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  appearance: none;
+  -webkit-appearance: none;
+  outline: none;
+  cursor: pointer;
 }
 
 .touch-button:active,
 .touch-button.active {
-  transform: translateY(1px);
+  transform: translateY(2px) scale(0.96);
   background: rgba(119, 243, 255, 0.34);
   box-shadow:
     0 0 24px rgba(119, 243, 255, 0.45),
     inset 0 0 0 1px rgba(255, 255, 255, 0.12);
 }
 
+.move-button::before {
+  font-size: 2.3rem;
+  line-height: 1;
+}
+
+#touch-left::before {
+  content: "<";
+}
+
+#touch-right::before {
+  content: ">";
+}
+
 .shoot-button {
-  width: 96px;
+  width: 92px;
+  height: 92px;
   color: #07111f;
   background: linear-gradient(180deg, #ffef8e, #ff9f43);
   text-shadow: none;
+}
+
+.shoot-button::before {
+  content: "";
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: #07111f;
+  box-shadow:
+    0 0 0 8px rgba(7, 17, 31, 0.14),
+    inset 0 5px 8px rgba(255, 255, 255, 0.26);
 }
 
 .pause-button {
@@ -320,9 +365,14 @@ body {
   right: max(14px, env(safe-area-inset-right));
   z-index: 5;
   display: none;
-  min-width: 48px;
-  min-height: 48px;
-  font-size: 1.1rem;
+  width: 52px;
+  height: 52px;
+}
+
+.pause-button::before {
+  content: "II";
+  font-size: 1rem;
+  letter-spacing: 0.08em;
 }
 
 @media (hover: none), (pointer: coarse), (max-width: 760px) {

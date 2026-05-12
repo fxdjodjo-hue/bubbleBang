@@ -291,6 +291,11 @@
       this.bindTouchButton("touch-left", "left");
       this.bindTouchButton("touch-right", "right");
       this.bindTouchButton("touch-shoot", "shoot");
+      const touchControls = document.getElementById("touch-controls");
+      const blockNativeTouch = (event) => event.preventDefault();
+      touchControls.addEventListener("contextmenu", blockNativeTouch);
+      touchControls.addEventListener("selectstart", blockNativeTouch);
+      touchControls.addEventListener("touchmove", blockNativeTouch, { passive: false });
 
       document.getElementById("pause-button").addEventListener("click", () => this.game.togglePause());
       document.getElementById("game-root").addEventListener("pointerdown", (event) => {
@@ -305,11 +310,21 @@
       const setActive = (isActive) => {
         this.touch[action] = isActive;
         button.classList.toggle("active", isActive);
+        button.setAttribute("aria-pressed", isActive ? "true" : "false");
       };
+      const blockNativeTouch = (event) => {
+        event.preventDefault();
+      };
+      button.setAttribute("aria-pressed", "false");
+      button.addEventListener("contextmenu", blockNativeTouch);
+      button.addEventListener("selectstart", blockNativeTouch);
+      button.addEventListener("dragstart", blockNativeTouch);
+      button.addEventListener("touchstart", blockNativeTouch, { passive: false });
       button.addEventListener("pointerdown", (event) => {
         event.preventDefault();
         if (button.setPointerCapture) button.setPointerCapture(event.pointerId);
         setActive(true);
+        if (navigator.vibrate) navigator.vibrate(12);
         if (action === "shoot") this.shootPressed = true;
       });
       button.addEventListener("pointerup", (event) => {
