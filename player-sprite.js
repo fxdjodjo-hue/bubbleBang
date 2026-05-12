@@ -4,6 +4,8 @@
   const SHEET_PATH = "assets/pang1989-character-spritesheet.png";
   const COLS = 4;
   const ROWS = 6;
+  /** Manhattan distance from corner bg color → transparent (tune if jeans clip). */
+  const CHROMA_TOLERANCE = 40;
   /** Frames used per row (sheet layout from asset). */
   const ROW_FRAMES = [2, 4, 3, 2, 2, 2];
 
@@ -19,11 +21,67 @@
   let sheet = null;
   let loadCallbacks = [];
 
+  function sourceDimensions(node) {
+    const w = node.naturalWidth || node.width;
+    const h = node.naturalHeight || node.height;
+    return { w, h };
+  }
+
+  /**
+   * Sample background from corners, remove solid sheet backdrop (no alpha in PNG).
+   */
+  function buildKeyedCanvas(image) {
+    const { w, h } = sourceDimensions(image);
+    if (!w || !h) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const g = canvas.getContext("2d");
+    g.drawImage(image, 0, 0);
+    const imageData = g.getImageData(0, 0, w, h);
+    const d = imageData.data;
+    const corners = [
+      [0, 0],
+      [w - 1, 0],
+      [0, h - 1],
+      [w - 1, h - 1],
+    ];
+    let keyR = 0;
+    let keyG = 0;
+    let keyB = 0;
+    for (const [cx, cy] of corners) {
+      const i = (cy * w + cx) * 4;
+      keyR += d[i];
+      keyG += d[i + 1];
+      keyB += d[i + 2];
+    }
+    keyR = Math.round(keyR / 4);
+    keyG = Math.round(keyG / 4);
+    keyB = Math.round(keyB / 4);
+    const tol = CHROMA_TOLERANCE;
+    for (let i = 0; i < d.length; i += 4) {
+      const dr = Math.abs(d[i] - keyR);
+      const dg = Math.abs(d[i + 1] - keyG);
+      const db = Math.abs(d[i + 2] - keyB);
+      if (dr + dg + db <= tol) {
+        d[i + 3] = 0;
+      }
+    }
+    g.putImageData(imageData, 0, 0);
+    return canvas;
+  }
+
   function loadSpriteSheet() {
     if (sheet) return sheet;
     const image = new Image();
-    sheet = { image, ready: false };
+    sheet = { image, ready: false, drawSource: null };
     image.onload = () => {
+      try {
+        sheet.drawSource = buildKeyedCanvas(image) || image;
+      } catch (e) {
+        console.warn("Sprite chroma-key failed, using raw sheet.", e);
+        sheet.drawSource = image;
+      }
       sheet.ready = true;
       const cbs = loadCallbacks.slice();
       loadCallbacks = [];
@@ -55,11 +113,16 @@
     loadCallbacks.push(callback);
   }
 
-  function cellSize(img) {
-    return {
-      w: img.naturalWidth / COLS,
-      h: img.naturalHeight / ROWS,
-    };
+  /** Integer cell grid; remainder width/height goes to last column/row. */
+  function cellRect(drawSource, col, row) {
+    const { w, h } = sourceDimensions(drawSource);
+    const baseW = Math.floor(w / COLS);
+    const baseH = Math.floor(h / ROWS);
+    const sx = col * baseW;
+    const sy = row * baseH;
+    const sw = col === COLS - 1 ? w - sx : baseW;
+    const sh = row === ROWS - 1 ? h - sy : baseH;
+    return { sx, sy, sw, sh };
   }
 
   function frameIndex(row, timeSec, fps) {
@@ -101,18 +164,16 @@
     return { row: ROW.idle, col: frameIndex(ROW.idle, now, 4) };
   }
 
-  function drawSprite(ctx, img, anim, destX, destY, destW, destH, facing) {
-    const { w: cw, h: ch } = cellSize(img);
+  function drawSprite(ctx, drawSource, anim, destX, destY, destW, destH, facing) {
     const col = Math.min(anim.col, ROW_FRAMES[anim.row] - 1);
-    const sx = col * cw;
-    const sy = anim.row * ch;
+    const { sx, sy, sw, sh } = cellRect(drawSource, col, anim.row);
     ctx.save();
     ctx.imageSmoothingEnabled = false;
     ctx.translate(destX + destW * 0.5, destY);
     if (facing === "left") {
       ctx.scale(-1, 1);
     }
-    ctx.drawImage(img, sx, sy, cw, ch, -destW * 0.5, 0, destW, destH);
+    ctx.drawImage(drawSource, sx, sy, sw, sh, -destW * 0.5, 0, destW, destH);
     ctx.restore();
   }
 
@@ -193,8 +254,9 @@
     });
 
     loadSpriteSheet();
-    if (sheet.ready && sheet.image.naturalWidth) {
-      drawSprite(ctx, sheet.image, anim, player.x, player.y, width, height, facing);
+    const src = sheet.drawSource || sheet.image;
+    if (sheet.ready && sourceDimensions(src).w) {
+      drawSprite(ctx, src, anim, player.x, player.y, width, height, facing);
     } else {
       drawFallbackBody(ctx, player, options);
     }
@@ -209,7 +271,9 @@
     onSpriteSheetReady,
     renderPlayerSprite,
     get isReady() {
-      return Boolean(sheet && sheet.ready);
+      if (!sheet || !sheet.ready) return false;
+      const src = sheet.drawSource || sheet.image;
+      return sourceDimensions(src).w > 0;
     },
   };
 })(window);
