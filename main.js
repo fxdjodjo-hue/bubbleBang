@@ -934,6 +934,7 @@
 
     loadCurrentLevel() {
       const level = this.levelManager.current;
+      this.player.lives = 3;
       this.player.resetPosition();
       this.player.invulnerable = 1.2;
       this.projectile = null;

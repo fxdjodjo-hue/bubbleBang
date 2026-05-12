@@ -92,6 +92,7 @@ class GameRoom {
 
   loadLevel() {
     const level = LEVELS[this.levelIndex];
+    this.teamLives = TEAM_LIVES;
     this.platforms = level.platforms.map((platform) => ({ ...platform }));
     this.balls = level.balls.map((ball) => new ServerBall(this.createId("ball"), ball));
     this.projectiles = [];
