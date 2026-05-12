@@ -40,6 +40,15 @@
             Room Code
             <input id="room-code-input" name="roomCode" maxlength="6" autocomplete="off" placeholder="ABCDE">
           </label>
+          <label>
+            Server URL
+            <input
+              id="socket-url-input"
+              name="socketUrl"
+              autocomplete="url"
+              placeholder="http://localhost:3001"
+            >
+          </label>
           <div class="menu-actions compact">
             <button id="create-room-button" class="menu-button" type="button">Create Room</button>
             <button id="join-room-button" class="menu-button secondary" type="button">Join Room</button>
@@ -72,7 +81,7 @@
       </section>
     </main>
 
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="main.js" defer></script>
   </body>
 </html>

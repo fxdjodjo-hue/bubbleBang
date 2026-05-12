@@ -147,6 +147,13 @@
       .slice(0, 6);
   }
 
+  function normalizeSocketUrl(value) {
+    const trimmed = String(value || "").trim().replace(/\/$/, "");
+    if (!trimmed) return "";
+    if (!/^https?:\/\//i.test(trimmed)) return "";
+    return trimmed;
+  }
+
   class InputManager {
     constructor(game) {
       this.game = game;
@@ -540,9 +547,11 @@
       this.roomCode = "";
       this.pendingConnectAction = null;
       this.lastInputPayload = "";
+      this.serverUrl = this.loadServerUrl();
     }
 
     get url() {
+      if (this.serverUrl) return this.serverUrl;
       if (window.location.protocol === "file:") return "http://localhost:3001";
       const localHost = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
       if (localHost && window.location.port && window.location.port !== "3001") {
@@ -551,9 +560,35 @@
       return window.location.origin;
     }
 
+    loadServerUrl() {
+      const query = new URLSearchParams(window.location.search);
+      const queryUrl = normalizeSocketUrl(query.get("server") || query.get("socketUrl"));
+      if (queryUrl) {
+        localStorage.setItem("bubbleBangSocketUrl", queryUrl);
+        return queryUrl;
+      }
+      return normalizeSocketUrl(localStorage.getItem("bubbleBangSocketUrl"));
+    }
+
+    setServerUrl(value) {
+      const nextUrl = normalizeSocketUrl(value);
+      if (nextUrl) {
+        localStorage.setItem("bubbleBangSocketUrl", nextUrl);
+      } else {
+        localStorage.removeItem("bubbleBangSocketUrl");
+      }
+      if (nextUrl !== this.serverUrl && this.socket) {
+        this.socket.disconnect();
+        this.socket = null;
+        this.playerId = null;
+        this.roomCode = "";
+      }
+      this.serverUrl = nextUrl;
+    }
+
     ensureSocket() {
       if (!window.io) {
-        this.game.setMultiplayerStatus("Socket.IO client not found. Run npm install, then npm run dev.");
+        this.game.setMultiplayerStatus("Socket.IO client failed to load. Check your network connection.");
         return false;
       }
       if (this.socket) return true;
@@ -573,7 +608,7 @@
       });
 
       this.socket.on("connect_error", () => {
-        this.game.setMultiplayerStatus("Server unavailable. Start it with npm run dev.");
+        this.game.setMultiplayerStatus(`Server unavailable at ${this.url}. Check the Server URL.`);
       });
 
       this.socket.on("disconnect", () => {
@@ -704,6 +739,7 @@
         roomPanel: document.getElementById("room-panel"),
         nicknameInput: document.getElementById("nickname-input"),
         roomCodeInput: document.getElementById("room-code-input"),
+        socketUrlInput: document.getElementById("socket-url-input"),
         connectionStatus: document.getElementById("connection-status"),
         roomCodeDisplay: document.getElementById("room-code-display"),
         playerList: document.getElementById("player-list"),
@@ -731,6 +767,7 @@
       this.ping = null;
 
       this.bindMenuButtons();
+      this.ui.socketUrlInput.value = this.multiplayer.serverUrl || this.multiplayer.url;
       window.addEventListener("resize", () => this.fitCanvas());
       window.addEventListener("orientationchange", () => this.fitCanvas());
       this.fitCanvas();
@@ -744,10 +781,12 @@
       document.getElementById("back-menu-button").addEventListener("click", () => this.showMainMenu());
       document.getElementById("create-room-button").addEventListener("click", () => {
         this.setMultiplayerStatus("Connecting...");
+        this.multiplayer.setServerUrl(this.ui.socketUrlInput.value);
         this.multiplayer.createRoom(this.ui.nicknameInput.value);
       });
       document.getElementById("join-room-button").addEventListener("click", () => {
         this.setMultiplayerStatus("Connecting...");
+        this.multiplayer.setServerUrl(this.ui.socketUrlInput.value);
         this.multiplayer.joinRoom(this.ui.roomCodeInput.value, this.ui.nicknameInput.value);
       });
       document.getElementById("leave-room-button").addEventListener("click", () => {
@@ -763,6 +802,11 @@
       this.ui.multiplayerForm.addEventListener("submit", (event) => event.preventDefault());
       this.ui.roomCodeInput.addEventListener("input", () => {
         this.ui.roomCodeInput.value = sanitizeRoomCode(this.ui.roomCodeInput.value);
+      });
+      this.ui.socketUrlInput.addEventListener("change", () => {
+        const normalized = normalizeSocketUrl(this.ui.socketUrlInput.value);
+        this.multiplayer.setServerUrl(normalized);
+        this.ui.socketUrlInput.value = normalized || this.multiplayer.url;
       });
     }
 

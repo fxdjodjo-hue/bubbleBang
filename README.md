@@ -17,6 +17,13 @@ npm run dev
 
 Then open `http://localhost:3001` in two browser tabs.
 
+Deployed frontend note:
+
+- Vercel can host the static canvas client.
+- Socket.IO multiplayer needs a persistent Node server host.
+- In the multiplayer menu, set `Server URL` to that backend, for example `https://your-bubble-bang-server.onrender.com`.
+- You can also open the frontend with `?server=https://your-node-server.example.com` to save the server URL in the browser.
+
 Controls:
 
 - Move: `A` / `D` or left / right arrow keys
