@@ -21,7 +21,8 @@ Deployed frontend note:
 
 - Vercel can host the static canvas client.
 - Socket.IO multiplayer needs a persistent Node server host.
-- In the multiplayer menu, set `Server URL` to that backend, for example `https://your-bubble-bang-server.onrender.com`.
+- The default deployed multiplayer backend is `https://bubblebang.onrender.com`.
+- In the multiplayer menu, set `Server URL` to a different backend if needed.
 - You can also open the frontend with `?server=https://your-node-server.example.com` to save the server URL in the browser.
 
 Controls:

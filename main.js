@@ -4,6 +4,7 @@
   const WIDTH = 960;
   const HEIGHT = 540;
   const FLOOR_Y = HEIGHT - 58;
+  const DEFAULT_SOCKET_SERVER = "https://bubblebang.onrender.com";
   const STATE = {
     MENU: "menu",
     MULTIPLAYER_MENU: "multiplayerMenu",
@@ -557,7 +558,7 @@
       if (localHost && window.location.port && window.location.port !== "3001") {
         return "http://localhost:3001";
       }
-      return window.location.origin;
+      return DEFAULT_SOCKET_SERVER;
     }
 
     loadServerUrl() {
