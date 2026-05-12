@@ -6,10 +6,10 @@
   const FLOOR_Y = HEIGHT - 58;
   const DEFAULT_SOCKET_SERVER = "https://bubblebang.onrender.com";
   const MULTIPLAYER_INTERPOLATION_DELAY_MS = 70;
-  const LOCAL_RECONCILE_DEADBAND = 180;
-  const LOCAL_RECONCILE_SOFTNESS = 0.04;
-  const LOCAL_RECONCILE_IDLE_STRENGTH = 0.38;
-  const LOCAL_RECONCILE_SNAP_DISTANCE = 420;
+  const LOCAL_RECONCILE_DEADBAND = 220;
+  const LOCAL_RECONCILE_SOFTNESS = 0.02;
+  const LOCAL_RECONCILE_IDLE_STRENGTH = 0.12;
+  const LOCAL_RECONCILE_SNAP_DISTANCE = 900;
   const MULTIPLAYER_PLAYER_SPEED = 360;
   const LOCAL_PROJECTILE_SPEED = 760;
   const LOCAL_SHOT_COOLDOWN = 0.3;
@@ -1071,6 +1071,14 @@
     }
 
     spawnLocalProjectile() {
+      const hasLocalProjectile = this.localProjectiles.some(
+        (projectile) => projectile.ownerId === this.multiplayer.playerId
+      );
+      const hasServerProjectile = this.multiplayerSnapshot?.projectiles?.some(
+        (projectile) => projectile.ownerId === this.multiplayer.playerId
+      );
+      if (hasLocalProjectile || hasServerProjectile) return;
+
       const player = this.localPlayerVisual || this.multiplayerSnapshot?.players?.find(
         (candidate) => candidate.id === this.multiplayer.playerId
       );
@@ -1181,10 +1189,6 @@
         .sort((a, b) => a.serverTime - b.serverTime)
         .slice(-12);
       this.processServerEvents(snapshot.events || []);
-      this.localProjectiles = this.localProjectiles.filter(
-        (projectile) => !snapshot.projectiles?.some((serverProjectile) => serverProjectile.ownerId === projectile.ownerId)
-      );
-
       if (snapshot.gameState === "waiting") this.state = STATE.MP_WAITING;
       if (snapshot.gameState === "countdown") this.state = STATE.MP_COUNTDOWN;
       if (snapshot.gameState === "playing") this.state = STATE.MP_PLAYING;
@@ -1207,6 +1211,11 @@
           const color = event.color || BALL_TYPES[event.size]?.color || "#77f3ff";
           this.particles.burst(event.x, event.y, color, event.size === "tiny" ? 16 : 24);
           this.shake = event.size === "large" ? 8 : 5;
+          if (event.ownerId) {
+            this.localProjectiles = this.localProjectiles.filter(
+              (projectile) => projectile.ownerId !== event.ownerId
+            );
+          }
         } else if (event.type === "player_hit") {
           this.particles.burst(event.x, event.y, "#f8fbff", 26);
           this.shake = 10;
@@ -1495,12 +1504,12 @@
       for (const platform of platforms) {
         this.renderPlatform(ctx, platform);
       }
+      const localProjectileOwners = new Set(this.localProjectiles.map((projectile) => projectile.ownerId));
       for (const projectile of projectiles) {
+        if (localProjectileOwners.has(projectile.ownerId)) continue;
         renderProjectileLine(ctx, projectile.x, projectile.y, projectile.y + projectile.height);
       }
-      const serverProjectileOwners = new Set(projectiles.map((projectile) => projectile.ownerId));
       for (const projectile of this.localProjectiles) {
-        if (serverProjectileOwners.has(projectile.ownerId)) continue;
         renderProjectileLine(ctx, projectile.x, projectile.y, projectile.originY);
       }
       for (const ball of balls) {
