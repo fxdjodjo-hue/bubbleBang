@@ -15,6 +15,17 @@
     jump: { prefix: "jump", frames: 12, fps: 10 },
   };
 
+  /**
+   * I PNG sono grandi (es. 669×569) con molto alpha: se li scaliamo al solo
+   * hitbox 46×58 il personaggio è minuscolo e i piedi restano sopra il suolo.
+   * Scaliamo di più e ancoriamo il basso dello sprite a player.y + height (linea pavimento).
+   */
+  const VISUAL_WIDTH_MULT = 2.15;
+  const VISUAL_HEIGHT_MULT = 2.35;
+  /** Ritaglio frazionale altezza sorgente (riduce vuoto sopra/sotto il personaggio). */
+  const SOURCE_TRIM_TOP = 0.05;
+  const SOURCE_TRIM_BOTTOM = 0.14;
+
   let pool = null;
   let loadCallbacks = [];
 
@@ -131,24 +142,51 @@
     return { tag: "idle", frame: frameIndex("idle", now) };
   }
 
-  function drawFrame(ctx, anim, destX, destY, destW, destH, facing) {
+  function drawFrame(ctx, anim, player, facing) {
+    const hitW = player.width || 46;
+    const hitH = player.height || 58;
     const imgs = pool.byTag[anim.tag];
     const img = imgs && imgs[anim.frame];
     if (!img || !img.complete || !img.naturalWidth) {
-      return false;
+      return { ok: false, labelY: player.y - 8 };
     }
+
+    const iw = img.naturalWidth;
+    const ih = img.naturalHeight;
+    const trimT = Math.floor(ih * SOURCE_TRIM_TOP);
+    const trimB = Math.floor(ih * SOURCE_TRIM_BOTTOM);
+    const sh = Math.max(1, ih - trimT - trimB);
+    const sw = iw;
+    const sx = 0;
+    const sy = trimT;
+    const croppedAspect = sw / sh;
+
+    const maxW = hitW * VISUAL_WIDTH_MULT;
+    const maxH = hitH * VISUAL_HEIGHT_MULT;
+    let drawW = maxW;
+    let drawH = maxH;
+    if (drawW / drawH > croppedAspect) {
+      drawW = drawH * croppedAspect;
+    } else {
+      drawH = drawW / croppedAspect;
+    }
+
+    const groundY = player.y + hitH;
+    const destTop = groundY - drawH;
+
     ctx.save();
     ctx.imageSmoothingEnabled = true;
-    ctx.translate(destX + destW * 0.5, destY);
+    ctx.translate(player.x + hitW * 0.5, destTop);
     if (facing === "left") {
       ctx.scale(-1, 1);
     }
-    ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, -destW * 0.5, 0, destW, destH);
+    ctx.drawImage(img, sx, sy, sw, sh, -drawW * 0.5, 0, drawW, drawH);
     ctx.restore();
-    return true;
+
+    return { ok: true, labelY: destTop - 10 };
   }
 
-  function drawNickname(ctx, player, width) {
+  function drawNickname(ctx, player, width, textY) {
     if (!player.nickname) return;
     ctx.save();
     ctx.font = "700 13px Inter, system-ui, sans-serif";
@@ -157,7 +195,6 @@
     ctx.strokeStyle = "rgba(0,0,0,0.7)";
     ctx.lineWidth = 4;
     const textX = player.x + width * 0.5;
-    const textY = player.y - 8;
     ctx.strokeText(player.nickname, textX, textY);
     ctx.fillText(player.nickname, textX, textY);
     ctx.restore();
@@ -211,7 +248,6 @@
    */
   function renderPlayerSprite(ctx, player, options) {
     const width = player.width || 46;
-    const height = player.height || 58;
     const invulnSec = resolveInvulnSeconds(player);
     const blink = invulnSec > 0 && Math.floor(performance.now() / 70) % 2 === 0;
     if (blink) return;
@@ -225,13 +261,20 @@
     });
 
     loadSpriteSheet();
-    const ok = pool.ready && drawFrame(ctx, anim, player.x, player.y, width, height, facing);
-    if (!ok) {
+    let labelY = player.y - 8;
+    if (pool.ready) {
+      const drawn = drawFrame(ctx, anim, player, facing);
+      if (drawn.ok) {
+        labelY = drawn.labelY;
+      } else {
+        drawFallbackBody(ctx, player, options);
+      }
+    } else {
       drawFallbackBody(ctx, player, options);
     }
 
     if (options.showName) {
-      drawNickname(ctx, player, width);
+      drawNickname(ctx, player, width, labelY);
     }
   }
 
