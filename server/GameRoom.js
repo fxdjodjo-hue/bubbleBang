@@ -102,7 +102,9 @@ class GameRoom {
       player.invulnerable = 1.2;
       player.hitCooldown = 0;
       player.shootCooldown = 0;
-      player.input = { left: false, right: false, shoot: false, shootPressed: false };
+      player.vy = 0;
+      player.onGround = true;
+      player.input = { left: false, right: false, shoot: false, shootPressed: false, jumpPressed: false };
     }
   }
 

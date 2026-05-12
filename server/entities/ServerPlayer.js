@@ -11,6 +11,7 @@ const {
   SHOOT_COOLDOWN,
 } = require("../config");
 const { clamp, rectOverlap } = require("../collision");
+const { applyPlayerVertical } = require("../playerVertical");
 
 class ServerPlayer {
   constructor(id, nickname, slot) {
@@ -20,7 +21,9 @@ class ServerPlayer {
     this.width = PLAYER_WIDTH;
     this.height = PLAYER_HEIGHT;
     this.speed = PLAYER_SPEED;
-    this.input = { left: false, right: false, shoot: false };
+    this.vy = 0;
+    this.onGround = true;
+    this.input = { left: false, right: false, shoot: false, shootPressed: false, jumpPressed: false };
     this.connected = true;
     this.facing = slot === 0 ? "right" : "left";
     this.invulnerable = 1.2;
@@ -36,6 +39,8 @@ class ServerPlayer {
     const spawnX = this.slot === 0 ? WIDTH * 0.42 : WIDTH * 0.58;
     this.x = spawnX - this.width * 0.5;
     this.y = FLOOR_Y - this.height;
+    this.vy = 0;
+    this.onGround = true;
     this.lastClientPositionAt = Date.now();
     this.clientPositionActiveUntil = 0;
   }
@@ -59,11 +64,13 @@ class ServerPlayer {
 
   setInput(input) {
     const shootPressed = Boolean(input && input.shootPressed);
+    const jumpPressed = Boolean(input && input.jumpPressed);
     this.input = {
       left: Boolean(input && input.left),
       right: Boolean(input && input.right),
       shoot: Boolean(input && input.shoot),
       shootPressed: this.input.shootPressed || shootPressed,
+      jumpPressed: this.input.jumpPressed || jumpPressed,
     };
 
     if (Number.isFinite(input?.seq)) {
@@ -85,17 +92,31 @@ class ServerPlayer {
     if (direction < 0) this.facing = "left";
     if (direction > 0) this.facing = "right";
 
-    if (Date.now() <= this.clientPositionActiveUntil) return;
+    const useClientX = Date.now() <= this.clientPositionActiveUntil;
+    if (!useClientX) {
+      const oldX = this.x;
+      this.x += direction * this.speed * dt;
+      this.x = clamp(this.x, 14, WIDTH - this.width - 14);
 
-    const oldX = this.x;
-    this.x += direction * this.speed * dt;
-    this.x = clamp(this.x, 14, WIDTH - this.width - 14);
+      const playerRect = this.rect;
+      for (const platform of platforms) {
+        if (!rectOverlap(playerRect, platform)) continue;
+        if (this.x > oldX) this.x = platform.x - this.width + 5;
+        if (this.x < oldX) this.x = platform.x + platform.width - 5;
+      }
+    }
 
-    const playerRect = this.rect;
-    for (const platform of platforms) {
-      if (!rectOverlap(playerRect, platform)) continue;
-      if (this.x > oldX) this.x = platform.x - this.width + 5;
-      if (this.x < oldX) this.x = platform.x + platform.width - 5;
+    applyPlayerVertical(this, dt, this.input, platforms);
+    this.input.jumpPressed = false;
+
+    if (!useClientX) {
+      const playerRect = this.rect;
+      const oldX = this.x;
+      for (const platform of platforms) {
+        if (!rectOverlap(playerRect, platform)) continue;
+        if (this.x > oldX) this.x = platform.x - this.width + 5;
+        if (this.x < oldX) this.x = platform.x + platform.width - 5;
+      }
     }
   }
 
@@ -113,7 +134,6 @@ class ServerPlayer {
         ? clamp(this.x + Math.sign(delta) * maxStep, minX, maxX)
         : targetX;
 
-    this.y = FLOOR_Y - this.height;
     this.lastClientPositionAt = now;
     this.clientPositionActiveUntil = now + CLIENT_POSITION_STALE_MS;
   }
@@ -149,6 +169,8 @@ class ServerPlayer {
       y: this.y,
       width: this.width,
       height: this.height,
+      vy: this.vy,
+      onGround: this.onGround,
       facing: this.facing,
       isShooting: this.shootCooldown > SHOOT_COOLDOWN - 0.12,
       invulnerable: this.invulnerable > 0,

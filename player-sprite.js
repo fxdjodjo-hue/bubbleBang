@@ -133,6 +133,9 @@
     if (options.invulnerable > 1.25) {
       return { tag: "hurt", frame: frameIndex("hurt", now) };
     }
+    if (options.pose !== "victory" && options.pose !== "defeat" && options.onGround === false) {
+      return { tag: "jump", frame: frameIndex("jump", now) };
+    }
     if (options.hasProjectile) {
       return { tag: "slide", frame: frameIndex("slide", now) };
     }
@@ -258,6 +261,7 @@
       invulnerable: invulnSec,
       hasProjectile: Boolean(options.hasProjectile),
       isWalking: Boolean(options.isWalking),
+      onGround: options.onGround !== false,
     });
 
     loadSpriteSheet();

@@ -11,6 +11,10 @@
   const MULTIPLAYER_PLAYER_SPEED = 360;
   const LOCAL_PROJECTILE_SPEED = 760;
   const LOCAL_SHOT_COOLDOWN = 0.3;
+  const PLAYER_GRAVITY = 2180;
+  const PLAYER_JUMP_VY = -500;
+  const PLAYER_CEILING_Y = 8;
+  const MP_PLAYER_Y_SNAP = 72;
   const STATE = {
     MENU: "menu",
     MULTIPLAYER_MENU: "multiplayerMenu",
@@ -136,6 +140,66 @@
     );
   }
 
+  function playerBody(player) {
+    return {
+      x: player.x,
+      y: player.y,
+      width: player.width,
+      height: player.height,
+    };
+  }
+
+  function playerFeetOnSurface(player, platforms) {
+    const feet = player.y + player.height;
+    const cx = player.x;
+    const cw = player.width;
+    const tol = 5;
+    if (player.vy < -38) return false;
+    if (feet >= FLOOR_Y - tol && feet <= FLOOR_Y + 10) return true;
+    for (let i = 0; i < platforms.length; i += 1) {
+      const p = platforms[i];
+      if (cx + cw <= p.x + 1 || cx >= p.x + p.width - 1) continue;
+      if (feet >= p.y - tol && feet <= p.y + 12) return true;
+    }
+    return false;
+  }
+
+  function applyPlayerVertical(player, dt, input, platforms) {
+    const oldY = player.y;
+    if (input.jumpPressed && playerFeetOnSurface(player, platforms)) {
+      player.vy = PLAYER_JUMP_VY;
+    }
+    player.vy += PLAYER_GRAVITY * dt;
+    player.y += player.vy * dt;
+
+    if (player.y + player.height > FLOOR_Y) {
+      player.y = FLOOR_Y - player.height;
+      if (player.vy > 0) player.vy = 0;
+    }
+    if (player.y < PLAYER_CEILING_Y) {
+      player.y = PLAYER_CEILING_Y;
+      if (player.vy < 0) player.vy = 0;
+    }
+
+    for (let i = 0; i < platforms.length; i += 1) {
+      const p = platforms[i];
+      const body = playerBody(player);
+      if (!rectOverlap(body, p)) continue;
+      const prevFeet = oldY + player.height;
+      if (player.vy >= 0 && prevFeet <= p.y + 14 && player.y + player.height > p.y) {
+        player.y = p.y - player.height;
+        if (player.vy > 0) player.vy = 0;
+        continue;
+      }
+      if (player.vy < 0 && oldY >= p.y + p.height - 14 && player.y < p.y + p.height) {
+        player.y = p.y + p.height;
+        if (player.vy < 0) player.vy = 0;
+      }
+    }
+
+    player.onGround = playerFeetOnSurface(player, platforms) && player.vy >= -48;
+  }
+
   function isTypingTarget(target) {
     if (!target || !target.tagName) return false;
     return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
@@ -171,6 +235,8 @@
         ...to,
         x: lerp(from.x, to.x, t),
         y: lerp(from.y, to.y, t),
+        vy: to.vy ?? from.vy ?? 0,
+        onGround: to.onGround,
         invulnerableTime: to.invulnerableTime ?? from.invulnerableTime ?? 0,
       })),
       balls: interpolateById(previous.balls || [], next.balls || [], amount, (from, to, t) => ({
@@ -209,6 +275,7 @@
       this.pausePressed = false;
       this.confirmPressed = false;
       this.shootPressed = false;
+      this.jumpPressed = false;
       window.addEventListener("keydown", (event) => this.handleKeyDown(event));
       window.addEventListener("keyup", (event) => this.handleKeyUp(event));
       this.bindTouchButton("touch-left", "left");
@@ -246,11 +313,12 @@
     handleKeyDown(event) {
       if (isTypingTarget(event.target)) return;
       const key = event.key.toLowerCase();
-      if (["arrowleft", "arrowright", " ", "spacebar"].includes(key)) {
+      if (["arrowleft", "arrowright", " ", "spacebar", "w"].includes(key)) {
         event.preventDefault();
       }
       if (!this.keys.has(key)) {
         if (key === " " || key === "spacebar") this.shootPressed = true;
+        if (key === "w") this.jumpPressed = true;
         if (key === "enter") this.confirmPressed = true;
         if (key === "escape" || key === "p") this.pausePressed = true;
       }
@@ -266,16 +334,20 @@
       const left = this.keys.has("arrowleft") || this.keys.has("a") || this.touch.left;
       const right = this.keys.has("arrowright") || this.keys.has("d") || this.touch.right;
       const shoot = this.keys.has(" ") || this.keys.has("spacebar") || this.touch.shoot;
+      const jump = this.keys.has("w");
       const actions = {
         left,
         right,
         move: (right ? 1 : 0) - (left ? 1 : 0),
         shoot,
+        jump,
         shootPressed: this.shootPressed,
+        jumpPressed: this.jumpPressed,
         confirm: this.confirmPressed,
         pause: this.pausePressed,
       };
       this.shootPressed = false;
+      this.jumpPressed = false;
       this.confirmPressed = false;
       this.pausePressed = false;
       return actions;
@@ -287,6 +359,8 @@
       this.width = 46;
       this.height = 58;
       this.speed = 360;
+      this.vy = 0;
+      this.onGround = true;
       this.facing = "right";
       this.isWalking = false;
       this.resetForRun();
@@ -299,11 +373,15 @@
       this.hitCooldown = 0;
       this.facing = "right";
       this.isWalking = false;
+      this.vy = 0;
+      this.onGround = true;
     }
 
     resetPosition() {
       this.x = WIDTH * 0.5 - this.width * 0.5;
       this.y = FLOOR_Y - this.height;
+      this.vy = 0;
+      this.onGround = true;
     }
 
     get rect() {
@@ -326,7 +404,6 @@
       const direction = input.move;
       if (direction < 0) this.facing = "left";
       if (direction > 0) this.facing = "right";
-      this.isWalking = direction !== 0;
       this.x += direction * this.speed * dt;
       this.x = clamp(this.x, 14, WIDTH - this.width - 14);
 
@@ -336,6 +413,18 @@
         if (this.x > oldX) this.x = platform.x - this.width + 5;
         if (this.x < oldX) this.x = platform.x + platform.width - 5;
       }
+
+      applyPlayerVertical(this, dt, input, platforms);
+
+      const oldX2 = this.x;
+      const playerRect2 = this.rect;
+      for (const platform of platforms) {
+        if (!rectOverlap(playerRect2, platform)) continue;
+        if (this.x > oldX2) this.x = platform.x - this.width + 5;
+        if (this.x < oldX2) this.x = platform.x + platform.width - 5;
+      }
+
+      this.isWalking = direction !== 0 && this.onGround;
     }
 
     takeHit() {
@@ -366,6 +455,7 @@
           isWalking: this.isWalking,
           hasProjectile: Boolean(options.projectile),
           pose: options.pose || null,
+          onGround: player.onGround !== false,
         }
       );
     }
@@ -800,6 +890,7 @@
         right: Boolean(input.right),
         shoot: Boolean(input.shoot),
         shootPressed: Boolean(input.shootPressed),
+        jumpPressed: Boolean(input.jumpPressed),
       };
       if (input.player) {
         payload.x = Math.round(Number(input.player.x) * 100) / 100;
@@ -812,6 +903,7 @@
         right: payload.right,
         shoot: payload.shoot,
         shootPressed: payload.shootPressed,
+        jumpPressed: payload.jumpPressed,
       });
       const controlsChanged = controlsPayload !== this.lastInputControlsPayload;
       const hasPosition = Number.isFinite(payload.x) && Number.isFinite(payload.y);
@@ -823,7 +915,7 @@
       const positionDue =
         positionChanged && now - this.lastInputSentAt >= MULTIPLAYER_INPUT_SEND_INTERVAL_MS;
 
-      if (!input.force && !controlsChanged && !payload.shootPressed && !positionDue) return;
+      if (!input.force && !controlsChanged && !payload.shootPressed && !payload.jumpPressed && !positionDue) return;
 
       payload.seq = ++this.inputSequence;
       this.lastInputControlsPayload = controlsPayload;
@@ -1113,6 +1205,7 @@
         left: actions.left,
         right: actions.right,
         shoot: actions.shoot,
+        jump: actions.jump,
       };
       this.localShotCooldown = Math.max(0, this.localShotCooldown - dt);
       this.updateLocalPlayerControl(dt, actions);
@@ -1147,15 +1240,25 @@
 
       const direction = (actions.right ? 1 : 0) - (actions.left ? 1 : 0);
       const width = latestPlayer.width || 46;
+      const height = latestPlayer.height || 58;
       const oldX = this.localPlayerVisual.x;
       this.localPlayerVisual.x = clamp(
         this.localPlayerVisual.x + direction * MULTIPLAYER_PLAYER_SPEED * dt,
         14,
         WIDTH - width - 14
       );
-      this.localPlayerVisual.y = latestPlayer.y;
+      const platforms = this.multiplayerSnapshot?.platforms || [];
+      const jumpInput = {
+        jumpPressed: Boolean(actions.jumpPressed),
+      };
+      applyPlayerVertical(this.localPlayerVisual, dt, jumpInput, platforms);
+      const serverY = latestPlayer.y;
+      if (Math.abs(this.localPlayerVisual.y - serverY) > MP_PLAYER_Y_SNAP) {
+        this.localPlayerVisual.y = serverY;
+        this.localPlayerVisual.vy = Number(latestPlayer.vy) || 0;
+      }
       this.localPlayerVisual.width = width;
-      this.localPlayerVisual.height = latestPlayer.height || 58;
+      this.localPlayerVisual.height = height;
       if (direction !== 0) {
         this.localPlayerVisual.facing = direction < 0 ? "left" : "right";
         this.localPlayerVisual.lastMovedAt = performance.now();
@@ -1167,12 +1270,25 @@
         x: this.localPlayerVisual.x + 5,
         y: this.localPlayerVisual.y + 6,
         width: width - 10,
-        height: (latestPlayer.height || 58) - 6,
+        height: height - 6,
       };
-      for (const platform of this.multiplayerSnapshot?.platforms || []) {
+      for (const platform of platforms) {
         if (!rectOverlap(playerRect, platform)) continue;
         if (this.localPlayerVisual.x > oldX) this.localPlayerVisual.x = platform.x - width + 5;
         if (this.localPlayerVisual.x < oldX) this.localPlayerVisual.x = platform.x + platform.width - 5;
+      }
+
+      const oldX2 = this.localPlayerVisual.x;
+      const playerRect2 = {
+        x: this.localPlayerVisual.x + 5,
+        y: this.localPlayerVisual.y + 6,
+        width: width - 10,
+        height: height - 6,
+      };
+      for (const platform of platforms) {
+        if (!rectOverlap(playerRect2, platform)) continue;
+        if (this.localPlayerVisual.x > oldX2) this.localPlayerVisual.x = platform.x - width + 5;
+        if (this.localPlayerVisual.x < oldX2) this.localPlayerVisual.x = platform.x + platform.width - 5;
       }
     }
 
@@ -1183,6 +1299,8 @@
         y: player.y,
         width: player.width || 46,
         height: player.height || 58,
+        vy: Number(player.vy) || 0,
+        onGround: player.onGround !== false,
         facing: player.facing || "right",
         lastMovedAt: 0,
       };
@@ -1430,6 +1548,8 @@
         ...latestPlayer,
         x: this.localPlayerVisual.x,
         y: this.localPlayerVisual.y,
+        vy: this.localPlayerVisual.vy,
+        onGround: this.localPlayerVisual.onGround,
         facing:
           direction < 0
             ? "left"
@@ -1498,7 +1618,7 @@
       let visible = true;
       let title = "Bubble Bang MVP";
       let subtitle = this.multiplayerStatus || "Choose a mode";
-      let controls = "Move: A/D or Arrow Keys - Shoot: Space - Pause: Esc/P";
+      let controls = "Move: A/D or Arrows — Jump: W — Shoot: Space — Pause: Esc/P";
       const snapshot = this.multiplayerSnapshot;
 
       if (this.state === STATE.PLAYING || this.state === STATE.MP_PLAYING) {
@@ -1678,6 +1798,7 @@
           isWalking,
           hasProjectile,
           pose,
+          onGround: renderPlayer.onGround !== false,
         });
       }
       const activeIds = new Set(players.map((p) => p.id));
