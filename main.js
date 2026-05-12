@@ -7,6 +7,9 @@
   const DEFAULT_SOCKET_SERVER = "https://bubblebang.onrender.com";
   const MULTIPLAYER_INTERPOLATION_DELAY_MS = 70;
   const MULTIPLAYER_INPUT_SEND_INTERVAL = 1 / 30;
+  const LOCAL_PREDICTION_MAX_MS = 120;
+  const LOCAL_RECONCILE_STRENGTH = 0.22;
+  const MULTIPLAYER_PLAYER_SPEED = 360;
   const STATE = {
     MENU: "menu",
     MULTIPLAYER_MENU: "multiplayerMenu",
@@ -806,6 +809,8 @@
       this.multiplayerSnapshot = null;
       this.multiplayerSnapshots = [];
       this.serverClockOffset = null;
+      this.currentMultiplayerInput = { left: false, right: false, shoot: false };
+      this.localPlayerVisual = null;
       this.waitingPlayers = [];
       this.lastInputSend = 0;
       this.ping = null;
@@ -905,6 +910,7 @@
       this.multiplayerSnapshot = null;
       this.multiplayerSnapshots = [];
       this.serverClockOffset = null;
+      this.localPlayerVisual = null;
       this.waitingPlayers = [];
       this.updateOverlay();
     }
@@ -916,6 +922,7 @@
       this.multiplayerSnapshot = null;
       this.multiplayerSnapshots = [];
       this.serverClockOffset = null;
+      this.localPlayerVisual = null;
       this.waitingPlayers = [];
       this.updateOverlay();
     }
@@ -991,6 +998,11 @@
     }
 
     updateMultiplayer(dt, actions) {
+      this.currentMultiplayerInput = {
+        left: actions.left,
+        right: actions.right,
+        shoot: actions.shoot,
+      };
       this.lastInputSend += dt;
       if (this.state === STATE.MP_PLAYING && this.lastInputSend >= MULTIPLAYER_INPUT_SEND_INTERVAL) {
         this.lastInputSend = 0;
@@ -1052,6 +1064,7 @@
       this.multiplayerSnapshot = null;
       this.multiplayerSnapshots = [];
       this.serverClockOffset = null;
+      this.localPlayerVisual = null;
       this.ui.roomCodeInput.value = roomCode;
       this.updateOverlay();
     }
@@ -1138,6 +1151,62 @@
       return baseSnapshot;
     }
 
+    getResponsiveLocalPlayer(interpolatedPlayer) {
+      const latestPlayer = this.multiplayerSnapshot?.players?.find(
+        (player) => player.id === this.multiplayer.playerId
+      );
+      if (!latestPlayer) return interpolatedPlayer;
+
+      const now = performance.now();
+      const direction =
+        (this.currentMultiplayerInput.right ? 1 : 0) - (this.currentMultiplayerInput.left ? 1 : 0);
+
+      if (!this.localPlayerVisual || this.localPlayerVisual.id !== latestPlayer.id) {
+        this.localPlayerVisual = {
+          id: latestPlayer.id,
+          x: latestPlayer.x,
+          y: latestPlayer.y,
+          lastTime: now,
+        };
+      }
+
+      const dt = clamp((now - this.localPlayerVisual.lastTime) / 1000, 0, 1 / 20);
+      this.localPlayerVisual.lastTime = now;
+
+      const width = latestPlayer.width || 46;
+      this.localPlayerVisual.x = clamp(
+        this.localPlayerVisual.x + direction * MULTIPLAYER_PLAYER_SPEED * dt,
+        14,
+        WIDTH - width - 14
+      );
+
+      const serverNow = Date.now() + (this.serverClockOffset || 0);
+      const predictionSeconds =
+        clamp(serverNow - this.multiplayerSnapshot.serverTime, 0, LOCAL_PREDICTION_MAX_MS) / 1000;
+      const targetX = clamp(
+        latestPlayer.x + direction * MULTIPLAYER_PLAYER_SPEED * predictionSeconds,
+        14,
+        WIDTH - width - 14
+      );
+      const correction = targetX - this.localPlayerVisual.x;
+      this.localPlayerVisual.x +=
+        Math.abs(correction) > 90 ? correction : correction * LOCAL_RECONCILE_STRENGTH;
+      this.localPlayerVisual.y = latestPlayer.y;
+
+      return {
+        ...(interpolatedPlayer || latestPlayer),
+        ...latestPlayer,
+        x: this.localPlayerVisual.x,
+        y: this.localPlayerVisual.y,
+        facing:
+          direction < 0
+            ? "left"
+            : direction > 0
+              ? "right"
+              : latestPlayer.facing || interpolatedPlayer?.facing || "right",
+      };
+    }
+
     handleMultiplayerDisconnect(message) {
       this.multiplayer.leaveRoom();
       this.mode = "single";
@@ -1146,6 +1215,7 @@
       this.multiplayerSnapshot = null;
       this.multiplayerSnapshots = [];
       this.serverClockOffset = null;
+      this.localPlayerVisual = null;
       this.waitingPlayers = [];
       this.updateOverlay();
     }
@@ -1332,7 +1402,8 @@
       }
       for (const player of players) {
         const isLocal = player.id === this.multiplayer.playerId;
-        renderPlayerShape(ctx, player, {
+        const renderPlayer = isLocal ? this.getResponsiveLocalPlayer(player) : player;
+        renderPlayerShape(ctx, renderPlayer, {
           primary: isLocal ? "#77f3ff" : "#ffd166",
           accent: isLocal ? "#ff5bc8" : "#8cff82",
           showName: true,
