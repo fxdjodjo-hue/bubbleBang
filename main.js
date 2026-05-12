@@ -6,11 +6,13 @@
   const FLOOR_Y = HEIGHT - 58;
   const DEFAULT_SOCKET_SERVER = "https://bubblebang.onrender.com";
   const MULTIPLAYER_INTERPOLATION_DELAY_MS = 70;
-  const LOCAL_RECONCILE_DEADBAND = 80;
-  const LOCAL_RECONCILE_SOFTNESS = 0.1;
+  const LOCAL_RECONCILE_DEADBAND = 180;
+  const LOCAL_RECONCILE_SOFTNESS = 0.04;
   const LOCAL_RECONCILE_IDLE_STRENGTH = 0.38;
-  const LOCAL_RECONCILE_SNAP_DISTANCE = 150;
+  const LOCAL_RECONCILE_SNAP_DISTANCE = 420;
   const MULTIPLAYER_PLAYER_SPEED = 360;
+  const LOCAL_PROJECTILE_SPEED = 760;
+  const LOCAL_SHOT_COOLDOWN = 0.3;
   const STATE = {
     MENU: "menu",
     MULTIPLAYER_MENU: "multiplayerMenu",
@@ -594,6 +596,8 @@
       this.pendingConnectAction = null;
       this.lastInputPayload = "";
       this.serverUrl = this.loadServerUrl();
+      this.transport = "--";
+      this.latencyTimer = null;
     }
 
     get url() {
@@ -641,10 +645,13 @@
 
       this.socket = window.io(this.url, {
         autoConnect: false,
-        transports: ["websocket", "polling"],
+        transports: ["websocket"],
+        upgrade: false,
       });
 
       this.socket.on("connect", () => {
+        this.updateTransport();
+        this.startLatencyProbe();
         this.game.setMultiplayerStatus("Connected.");
         if (this.pendingConnectAction) {
           const action = this.pendingConnectAction;
@@ -658,6 +665,7 @@
       });
 
       this.socket.on("disconnect", () => {
+        this.stopLatencyProbe();
         if (isMultiplayerState(this.game.state)) {
           this.game.handleMultiplayerDisconnect("Disconnected from server.");
         }
@@ -706,6 +714,32 @@
       });
 
       return true;
+    }
+
+    updateTransport() {
+      this.transport = this.socket?.io?.engine?.transport?.name || "websocket";
+      this.game.updateNetworkStats({ transport: this.transport });
+    }
+
+    startLatencyProbe() {
+      this.stopLatencyProbe();
+      this.latencyTimer = setInterval(() => {
+        if (!this.socket || !this.socket.connected) return;
+        const sentAt = performance.now();
+        this.socket.timeout(1500).emit("latency_probe", {}, (error) => {
+          if (error) return;
+          this.game.updateNetworkStats({
+            rtt: Math.round(performance.now() - sentAt),
+            transport: this.transport,
+          });
+        });
+      }, 1000);
+    }
+
+    stopLatencyProbe() {
+      if (!this.latencyTimer) return;
+      clearInterval(this.latencyTimer);
+      this.latencyTimer = null;
     }
 
     connectThen(action) {
@@ -812,6 +846,11 @@
       this.serverClockOffset = null;
       this.currentMultiplayerInput = { left: false, right: false, shoot: false };
       this.localPlayerVisual = null;
+      this.localProjectiles = [];
+      this.previousMultiplayerShoot = false;
+      this.localShotCooldown = 0;
+      this.networkStats = { rtt: null, transport: "--", snapshotMs: null };
+      this.lastSnapshotArrivedAt = null;
       this.waitingPlayers = [];
       this.ping = null;
 
@@ -829,11 +868,13 @@
       document.getElementById("multiplayer-button").addEventListener("click", () => this.showMultiplayerMenu());
       document.getElementById("back-menu-button").addEventListener("click", () => this.showMainMenu());
       document.getElementById("create-room-button").addEventListener("click", () => {
+        document.activeElement?.blur();
         this.setMultiplayerStatus("Connecting...");
         this.multiplayer.setServerUrl(this.ui.socketUrlInput.value);
         this.multiplayer.createRoom(this.ui.nicknameInput.value);
       });
       document.getElementById("join-room-button").addEventListener("click", () => {
+        document.activeElement?.blur();
         this.setMultiplayerStatus("Connecting...");
         this.multiplayer.setServerUrl(this.ui.socketUrlInput.value);
         this.multiplayer.joinRoom(this.ui.roomCodeInput.value, this.ui.nicknameInput.value);
@@ -911,6 +952,9 @@
       this.multiplayerSnapshots = [];
       this.serverClockOffset = null;
       this.localPlayerVisual = null;
+      this.localProjectiles = [];
+      this.previousMultiplayerShoot = false;
+      this.localShotCooldown = 0;
       this.waitingPlayers = [];
       this.updateOverlay();
     }
@@ -923,6 +967,9 @@
       this.multiplayerSnapshots = [];
       this.serverClockOffset = null;
       this.localPlayerVisual = null;
+      this.localProjectiles = [];
+      this.previousMultiplayerShoot = false;
+      this.localShotCooldown = 0;
       this.waitingPlayers = [];
       this.updateOverlay();
     }
@@ -1003,10 +1050,43 @@
         right: actions.right,
         shoot: actions.shoot,
       };
+      this.localShotCooldown = Math.max(0, this.localShotCooldown - dt);
+      this.updateLocalProjectiles(dt);
       if (this.state === STATE.MP_PLAYING) {
         this.multiplayer.sendInput(actions);
+        if (actions.shoot && !this.previousMultiplayerShoot && this.localShotCooldown <= 0) {
+          this.spawnLocalProjectile();
+        }
       }
+      this.previousMultiplayerShoot = actions.shoot;
       this.updateHud();
+    }
+
+    updateLocalProjectiles(dt) {
+      for (const projectile of this.localProjectiles) {
+        projectile.y -= LOCAL_PROJECTILE_SPEED * dt;
+        projectile.height = projectile.originY - projectile.y;
+      }
+      this.localProjectiles = this.localProjectiles.filter((projectile) => projectile.y > 20);
+    }
+
+    spawnLocalProjectile() {
+      const player = this.localPlayerVisual || this.multiplayerSnapshot?.players?.find(
+        (candidate) => candidate.id === this.multiplayer.playerId
+      );
+      if (!player) return;
+      const width = player.width || 46;
+      this.localProjectiles = [
+        {
+          id: `local-${performance.now()}`,
+          ownerId: this.multiplayer.playerId,
+          x: player.x + width * 0.5,
+          y: player.y + 14,
+          originY: player.y + 14,
+          height: 0,
+        },
+      ];
+      this.localShotCooldown = LOCAL_SHOT_COOLDOWN;
     }
 
     handleProjectileCollisions() {
@@ -1056,6 +1136,7 @@
     }
 
     handleRoomJoined(roomCode, message) {
+      document.activeElement?.blur();
       this.mode = "multiplayer";
       this.state = STATE.MP_WAITING;
       this.multiplayerStatus = message;
@@ -1063,6 +1144,9 @@
       this.multiplayerSnapshots = [];
       this.serverClockOffset = null;
       this.localPlayerVisual = null;
+      this.localProjectiles = [];
+      this.previousMultiplayerShoot = false;
+      this.localShotCooldown = 0;
       this.ui.roomCodeInput.value = roomCode;
       this.updateOverlay();
     }
@@ -1081,6 +1165,10 @@
       this.mode = "multiplayer";
       this.multiplayerSnapshot = snapshot;
       const now = Date.now();
+      if (this.lastSnapshotArrivedAt !== null) {
+        this.networkStats.snapshotMs = Math.round(now - this.lastSnapshotArrivedAt);
+      }
+      this.lastSnapshotArrivedAt = now;
       const measuredOffset = snapshot.serverTime - now;
       this.serverClockOffset =
         this.serverClockOffset === null
@@ -1093,6 +1181,9 @@
         .sort((a, b) => a.serverTime - b.serverTime)
         .slice(-12);
       this.processServerEvents(snapshot.events || []);
+      this.localProjectiles = this.localProjectiles.filter(
+        (projectile) => !snapshot.projectiles?.some((serverProjectile) => serverProjectile.ownerId === projectile.ownerId)
+      );
 
       if (snapshot.gameState === "waiting") this.state = STATE.MP_WAITING;
       if (snapshot.gameState === "countdown") this.state = STATE.MP_COUNTDOWN;
@@ -1100,6 +1191,14 @@
       if (snapshot.gameState === "levelComplete") this.state = STATE.MP_LEVEL_COMPLETE;
       if (snapshot.gameState === "gameOver") this.state = STATE.MP_GAME_OVER;
       this.updateOverlay();
+    }
+
+    updateNetworkStats(stats) {
+      this.networkStats = {
+        ...this.networkStats,
+        ...stats,
+      };
+      this.updateHud();
     }
 
     processServerEvents(events) {
@@ -1213,6 +1312,9 @@
       this.multiplayerSnapshots = [];
       this.serverClockOffset = null;
       this.localPlayerVisual = null;
+      this.localProjectiles = [];
+      this.previousMultiplayerShoot = false;
+      this.localShotCooldown = 0;
       this.waitingPlayers = [];
       this.updateOverlay();
     }
@@ -1242,7 +1344,9 @@
         this.hud.lives.textContent = `Team Lives ${Math.max(0, snapshot.teamLives)}`;
         this.hud.balls.textContent = `Balls ${snapshot.balls.length}`;
         this.hud.score.textContent = snapshot.score.toString().padStart(6, "0");
-        this.hud.ping.textContent = this.ping === null ? "Ping --" : `Ping ${this.ping}ms`;
+        const rtt = this.networkStats.rtt === null ? "--" : `${this.networkStats.rtt}ms`;
+        const snapshotMs = this.networkStats.snapshotMs === null ? "--" : `${this.networkStats.snapshotMs}ms`;
+        this.hud.ping.textContent = `RTT ${rtt} ${this.networkStats.transport} S ${snapshotMs}`;
         return;
       }
 
@@ -1393,6 +1497,11 @@
       }
       for (const projectile of projectiles) {
         renderProjectileLine(ctx, projectile.x, projectile.y, projectile.y + projectile.height);
+      }
+      const serverProjectileOwners = new Set(projectiles.map((projectile) => projectile.ownerId));
+      for (const projectile of this.localProjectiles) {
+        if (serverProjectileOwners.has(projectile.ownerId)) continue;
+        renderProjectileLine(ctx, projectile.x, projectile.y, projectile.originY);
       }
       for (const ball of balls) {
         renderBallVisual(ctx, ball, 0, 0);

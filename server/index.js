@@ -40,6 +40,10 @@ io.on("connection", (socket) => {
     rooms.handleInput(socket, payload);
   });
 
+  socket.on("latency_probe", (_payload = {}, ack) => {
+    if (typeof ack === "function") ack({ serverTime: Date.now() });
+  });
+
   socket.on("leave_room", () => {
     rooms.leaveRoom(socket);
   });
