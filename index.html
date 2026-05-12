@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#081427">
+    <title>Bubble Bang MVP</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main id="game-root" aria-label="Bubble Bang MVP game">
+      <canvas id="game-canvas" width="960" height="540"></canvas>
+
+      <section id="hud" aria-live="polite">
+        <div class="hud-group">
+          <span id="hud-level">Level 1</span>
+          <span id="hud-lives">Lives 3</span>
+          <span id="hud-balls">Balls 1</span>
+          <span id="hud-ping" class="hud-ping">Ping --</span>
+        </div>
+        <div class="hud-score" id="hud-score">000000</div>
+      </section>
+
+      <section id="state-panel" class="state-panel">
+        <h1 id="state-title">Bubble Bang MVP</h1>
+        <p id="state-subtitle">Choose a mode</p>
+        <p id="state-controls">Move: A/D or Arrow Keys - Shoot: Space - Pause: Esc/P</p>
+
+        <div id="menu-actions" class="menu-actions">
+          <button id="single-player-button" class="menu-button" type="button">Single Player</button>
+          <button id="multiplayer-button" class="menu-button secondary" type="button">Multiplayer</button>
+        </div>
+
+        <form id="multiplayer-form" class="multiplayer-card hidden">
+          <label>
+            Nickname
+            <input id="nickname-input" name="nickname" maxlength="16" autocomplete="nickname" placeholder="Player">
+          </label>
+          <label>
+            Room Code
+            <input id="room-code-input" name="roomCode" maxlength="6" autocomplete="off" placeholder="ABCDE">
+          </label>
+          <div class="menu-actions compact">
+            <button id="create-room-button" class="menu-button" type="button">Create Room</button>
+            <button id="join-room-button" class="menu-button secondary" type="button">Join Room</button>
+          </div>
+          <button id="back-menu-button" class="text-button" type="button">Back</button>
+        </form>
+
+        <section id="room-panel" class="room-panel hidden">
+          <div id="connection-status">Offline</div>
+          <div id="room-code-display" class="room-code">Room -----</div>
+          <div id="player-list" class="player-list"></div>
+          <div class="menu-actions compact">
+            <button id="copy-room-button" class="menu-button secondary" type="button">Copy Code</button>
+            <button id="restart-room-button" class="menu-button secondary" type="button">Restart</button>
+            <button id="leave-room-button" class="menu-button danger" type="button">Leave</button>
+          </div>
+        </section>
+      </section>
+
+      <button id="pause-button" class="touch-button pause-button" type="button" aria-label="Pause game">
+        II
+      </button>
+
+      <section id="touch-controls" aria-label="Touch controls">
+        <div class="touch-pad">
+          <button id="touch-left" class="touch-button move-button" type="button" aria-label="Move left">&lt;</button>
+          <button id="touch-right" class="touch-button move-button" type="button" aria-label="Move right">&gt;</button>
+        </div>
+        <button id="touch-shoot" class="touch-button shoot-button" type="button" aria-label="Shoot">FIRE</button>
+      </section>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="main.js" defer></script>
+  </body>
+</html>
