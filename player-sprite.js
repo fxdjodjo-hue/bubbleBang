@@ -2,7 +2,8 @@
   "use strict";
 
   const SHEET_PATH = "assets/pang1989-character-spritesheet.png";
-  const COLS = 4;
+  /** Sheet is 1536px wide: 8 columns × 192px matches one character frame (4 cols showed two abreast). */
+  const COLS = 8;
   const ROWS = 6;
   /** Manhattan distance from corner bg color → transparent (tune if jeans clip). */
   const CHROMA_TOLERANCE = 40;
