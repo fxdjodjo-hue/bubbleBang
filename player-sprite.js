@@ -1,135 +1,101 @@
 (function (global) {
   "use strict";
 
-  const SHEET_PATH = "assets/pang1989-character-spritesheet.png";
-  /** Sheet is 1536px wide: 8 columns × 192px matches one character frame (4 cols showed two abreast). */
-  const COLS = 8;
-  const ROWS = 6;
-  /** Manhattan distance from corner bg color → transparent (tune if jeans clip). */
-  const CHROMA_TOLERANCE = 40;
-  /** Frames used per row (sheet layout from asset). */
-  const ROW_FRAMES = [2, 4, 3, 2, 2, 2];
-
-  const ROW = {
-    idle: 0,
-    walk: 1,
-    shoot: 2,
-    hurt: 3,
-    defeat: 4,
-    victory: 5,
+  /**
+   * Sequenze da assets/player/ (copiate da Desktop/png, nomi senza spazi).
+   * run = camminata, slide = sparo (nessun frame “shoot” nella cartella),
+   * jump = vittoria, dead = game over.
+   */
+  const ATLAS = {
+    idle: { prefix: "idle", frames: 10, fps: 7 },
+    run: { prefix: "run", frames: 8, fps: 11 },
+    slide: { prefix: "slide", frames: 5, fps: 12 },
+    hurt: { prefix: "hurt", frames: 8, fps: 14 },
+    dead: { prefix: "dead", frames: 10, fps: 9 },
+    jump: { prefix: "jump", frames: 12, fps: 10 },
   };
 
-  let sheet = null;
+  let pool = null;
   let loadCallbacks = [];
 
-  function sourceDimensions(node) {
-    const w = node.naturalWidth || node.width;
-    const h = node.naturalHeight || node.height;
-    return { w, h };
+  function pathFor(prefix, index1) {
+    return `assets/player/${prefix}-${String(index1).padStart(2, "0")}.png`;
   }
 
-  /**
-   * Sample background from corners, remove solid sheet backdrop (no alpha in PNG).
-   */
-  function buildKeyedCanvas(image) {
-    const { w, h } = sourceDimensions(image);
-    if (!w || !h) return null;
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const g = canvas.getContext("2d");
-    g.drawImage(image, 0, 0);
-    const imageData = g.getImageData(0, 0, w, h);
-    const d = imageData.data;
-    const corners = [
-      [0, 0],
-      [w - 1, 0],
-      [0, h - 1],
-      [w - 1, h - 1],
-    ];
-    let keyR = 0;
-    let keyG = 0;
-    let keyB = 0;
-    for (const [cx, cy] of corners) {
-      const i = (cy * w + cx) * 4;
-      keyR += d[i];
-      keyG += d[i + 1];
-      keyB += d[i + 2];
-    }
-    keyR = Math.round(keyR / 4);
-    keyG = Math.round(keyG / 4);
-    keyB = Math.round(keyB / 4);
-    const tol = CHROMA_TOLERANCE;
-    for (let i = 0; i < d.length; i += 4) {
-      const dr = Math.abs(d[i] - keyR);
-      const dg = Math.abs(d[i + 1] - keyG);
-      const db = Math.abs(d[i + 2] - keyB);
-      if (dr + dg + db <= tol) {
-        d[i + 3] = 0;
+  function fireLoadCallbacks() {
+    const cbs = loadCallbacks.slice();
+    loadCallbacks = [];
+    for (const cb of cbs) {
+      try {
+        cb();
+      } catch (e) {
+        console.error(e);
       }
     }
-    g.putImageData(imageData, 0, 0);
-    return canvas;
+  }
+
+  function tryComplete() {
+    if (!pool || pool.loaded < pool.total) return;
+    pool.ready = pool.loadErrors === 0;
+    if (!pool.ready) {
+      console.warn("Player sprite load incomplete; using vector fallback.");
+    }
+    fireLoadCallbacks();
   }
 
   function loadSpriteSheet() {
-    if (sheet) return sheet;
-    const image = new Image();
-    sheet = { image, ready: false, drawSource: null };
-    image.onload = () => {
-      try {
-        sheet.drawSource = buildKeyedCanvas(image) || image;
-      } catch (e) {
-        console.warn("Sprite chroma-key failed, using raw sheet.", e);
-        sheet.drawSource = image;
-      }
-      sheet.ready = true;
-      const cbs = loadCallbacks.slice();
-      loadCallbacks = [];
-      for (const cb of cbs) {
-        try {
-          cb();
-        } catch (e) {
-          console.error(e);
-        }
-      }
+    if (pool) return pool;
+    pool = {
+      ready: false,
+      failed: false,
+      byTag: {},
+      total: 0,
+      loaded: 0,
+      loadErrors: 0,
     };
-    image.onerror = () => {
-      console.warn("Player sprite sheet failed to load:", SHEET_PATH);
-      sheet.failed = true;
-      const cbs = loadCallbacks.slice();
-      loadCallbacks = [];
-      for (const cb of cbs) cb();
-    };
-    image.src = SHEET_PATH;
-    return sheet;
+
+    const tasks = [];
+    for (const [tag, spec] of Object.entries(ATLAS)) {
+      pool.byTag[tag] = new Array(spec.frames);
+      for (let i = 1; i <= spec.frames; i += 1) {
+        tasks.push({ tag, index: i - 1, path: pathFor(spec.prefix, i) });
+      }
+    }
+    pool.total = tasks.length;
+
+    for (const t of tasks) {
+      const img = new Image();
+      img.onload = () => {
+        pool.byTag[t.tag][t.index] = img;
+        pool.loaded += 1;
+        tryComplete();
+      };
+      img.onerror = () => {
+        console.warn("Sprite failed to load:", t.path);
+        pool.loadErrors += 1;
+        pool.loaded += 1;
+        tryComplete();
+      };
+      img.src = t.path;
+    }
+
+    return pool;
   }
 
   function onSpriteSheetReady(callback) {
     loadSpriteSheet();
-    if (sheet.ready || sheet.failed) {
+    if (pool.ready || (pool.loaded >= pool.total && pool.loadErrors > 0)) {
       callback();
       return;
     }
     loadCallbacks.push(callback);
   }
 
-  /** Integer cell grid; remainder width/height goes to last column/row. */
-  function cellRect(drawSource, col, row) {
-    const { w, h } = sourceDimensions(drawSource);
-    const baseW = Math.floor(w / COLS);
-    const baseH = Math.floor(h / ROWS);
-    const sx = col * baseW;
-    const sy = row * baseH;
-    const sw = col === COLS - 1 ? w - sx : baseW;
-    const sh = row === ROWS - 1 ? h - sy : baseH;
-    return { sx, sy, sw, sh };
-  }
-
-  function frameIndex(row, timeSec, fps) {
-    const count = ROW_FRAMES[row] || 1;
-    const i = Math.floor(timeSec * fps) % count;
-    return Math.min(i, count - 1);
+  function frameIndex(tag, timeSec) {
+    const spec = ATLAS[tag];
+    const n = spec.frames;
+    const i = Math.floor(timeSec * spec.fps) % n;
+    return Math.min(Math.max(0, i), n - 1);
   }
 
   function resolveInvulnSeconds(player) {
@@ -148,34 +114,38 @@
   function pickAnim(options) {
     const now = performance.now() / 1000;
     if (options.pose === "victory") {
-      return { row: ROW.victory, col: frameIndex(ROW.victory, now, 3) };
+      return { tag: "jump", frame: frameIndex("jump", now) };
     }
     if (options.pose === "defeat") {
-      return { row: ROW.defeat, col: Math.min(ROW_FRAMES[ROW.defeat] - 1, Math.floor(now * 2) % ROW_FRAMES[ROW.defeat]) };
+      return { tag: "dead", frame: frameIndex("dead", now) };
     }
     if (options.invulnerable > 1.25) {
-      return { row: ROW.hurt, col: frameIndex(ROW.hurt, now, 6) };
+      return { tag: "hurt", frame: frameIndex("hurt", now) };
     }
     if (options.hasProjectile) {
-      return { row: ROW.shoot, col: frameIndex(ROW.shoot, now, 8) };
+      return { tag: "slide", frame: frameIndex("slide", now) };
     }
     if (options.isWalking) {
-      return { row: ROW.walk, col: frameIndex(ROW.walk, now, 10) };
+      return { tag: "run", frame: frameIndex("run", now) };
     }
-    return { row: ROW.idle, col: frameIndex(ROW.idle, now, 4) };
+    return { tag: "idle", frame: frameIndex("idle", now) };
   }
 
-  function drawSprite(ctx, drawSource, anim, destX, destY, destW, destH, facing) {
-    const col = Math.min(anim.col, ROW_FRAMES[anim.row] - 1);
-    const { sx, sy, sw, sh } = cellRect(drawSource, col, anim.row);
+  function drawFrame(ctx, anim, destX, destY, destW, destH, facing) {
+    const imgs = pool.byTag[anim.tag];
+    const img = imgs && imgs[anim.frame];
+    if (!img || !img.complete || !img.naturalWidth) {
+      return false;
+    }
     ctx.save();
-    ctx.imageSmoothingEnabled = false;
+    ctx.imageSmoothingEnabled = true;
     ctx.translate(destX + destW * 0.5, destY);
     if (facing === "left") {
       ctx.scale(-1, 1);
     }
-    ctx.drawImage(drawSource, sx, sy, sw, sh, -destW * 0.5, 0, destW, destH);
+    ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, -destW * 0.5, 0, destW, destH);
     ctx.restore();
+    return true;
   }
 
   function drawNickname(ctx, player, width) {
@@ -255,10 +225,8 @@
     });
 
     loadSpriteSheet();
-    const src = sheet.drawSource || sheet.image;
-    if (sheet.ready && sourceDimensions(src).w) {
-      drawSprite(ctx, src, anim, player.x, player.y, width, height, facing);
-    } else {
+    const ok = pool.ready && drawFrame(ctx, anim, player.x, player.y, width, height, facing);
+    if (!ok) {
       drawFallbackBody(ctx, player, options);
     }
 
@@ -272,9 +240,7 @@
     onSpriteSheetReady,
     renderPlayerSprite,
     get isReady() {
-      if (!sheet || !sheet.ready) return false;
-      const src = sheet.drawSource || sheet.image;
-      return sourceDimensions(src).w > 0;
+      return Boolean(pool && pool.ready);
     },
   };
 })(window);
