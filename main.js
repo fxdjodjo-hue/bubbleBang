@@ -455,7 +455,7 @@
           isWalking: this.isWalking,
           hasProjectile: Boolean(options.projectile),
           pose: options.pose || null,
-          onGround: player.onGround !== false,
+          onGround: this.onGround !== false,
         }
       );
     }
