@@ -5,7 +5,7 @@ module.exports = {
   HEIGHT: 540,
   FLOOR_Y: 482,
   TICK_RATE: 30,
-  SNAPSHOT_RATE: 15,
+  SNAPSHOT_RATE: 30,
   TEAM_LIVES: 3,
   ROOM_IDLE_MS: 10 * 60 * 1000,
   PLAYER_WIDTH: 46,

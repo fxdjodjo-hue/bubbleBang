@@ -5,6 +5,10 @@
   const HEIGHT = 540;
   const FLOOR_Y = HEIGHT - 58;
   const DEFAULT_SOCKET_SERVER = "https://bubblebang.onrender.com";
+  const MULTIPLAYER_INTERPOLATION_DELAY_MS = 100;
+  const LOCAL_PREDICTION_MAX_MS = 90;
+  const MULTIPLAYER_INPUT_SEND_INTERVAL = 1 / 30;
+  const MULTIPLAYER_PLAYER_SPEED = 360;
   const STATE = {
     MENU: "menu",
     MULTIPLAYER_MENU: "multiplayerMenu",
@@ -99,6 +103,7 @@
 
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const rand = (min, max) => min + Math.random() * (max - min);
+  const lerp = (from, to, amount) => from + (to - from) * amount;
 
   function isMultiplayerState(state) {
     return state.startsWith("multiplayer");
@@ -146,6 +151,43 @@
       .toUpperCase()
       .replace(/[^A-Z0-9]/g, "")
       .slice(0, 6);
+  }
+
+  function interpolateById(previousItems, nextItems, amount, interpolateItem) {
+    const previousById = new Map(previousItems.map((item) => [item.id, item]));
+    return nextItems.map((nextItem) => {
+      const previousItem = previousById.get(nextItem.id);
+      return previousItem ? interpolateItem(previousItem, nextItem, amount) : { ...nextItem };
+    });
+  }
+
+  function interpolateSnapshot(previous, next, amount) {
+    return {
+      ...next,
+      players: interpolateById(previous.players || [], next.players || [], amount, (from, to, t) => ({
+        ...to,
+        x: lerp(from.x, to.x, t),
+        y: lerp(from.y, to.y, t),
+      })),
+      balls: interpolateById(previous.balls || [], next.balls || [], amount, (from, to, t) => ({
+        ...to,
+        x: lerp(from.x, to.x, t),
+        y: lerp(from.y, to.y, t),
+        vx: lerp(from.vx || 0, to.vx || 0, t),
+        vy: lerp(from.vy || 0, to.vy || 0, t),
+      })),
+      projectiles: interpolateById(
+        previous.projectiles || [],
+        next.projectiles || [],
+        amount,
+        (from, to, t) => ({
+          ...to,
+          x: lerp(from.x, to.x, t),
+          y: lerp(from.y, to.y, t),
+          height: lerp(from.height, to.height, t),
+        })
+      ),
+    };
   }
 
   function normalizeSocketUrl(value) {
@@ -763,6 +805,9 @@
       this.mode = "single";
       this.multiplayerStatus = "";
       this.multiplayerSnapshot = null;
+      this.multiplayerSnapshots = [];
+      this.serverClockOffset = null;
+      this.currentMultiplayerInput = { left: false, right: false, shoot: false };
       this.waitingPlayers = [];
       this.lastInputSend = 0;
       this.ping = null;
@@ -860,6 +905,8 @@
       this.state = STATE.MENU;
       this.multiplayerStatus = message;
       this.multiplayerSnapshot = null;
+      this.multiplayerSnapshots = [];
+      this.serverClockOffset = null;
       this.waitingPlayers = [];
       this.updateOverlay();
     }
@@ -869,6 +916,8 @@
       this.state = STATE.MULTIPLAYER_MENU;
       this.multiplayerStatus = message || "Create a room or join a friend's code.";
       this.multiplayerSnapshot = null;
+      this.multiplayerSnapshots = [];
+      this.serverClockOffset = null;
       this.waitingPlayers = [];
       this.updateOverlay();
     }
@@ -943,8 +992,13 @@
     }
 
     updateMultiplayer(dt, actions) {
+      this.currentMultiplayerInput = {
+        left: actions.left,
+        right: actions.right,
+        shoot: actions.shoot,
+      };
       this.lastInputSend += dt;
-      if (this.state === STATE.MP_PLAYING && this.lastInputSend >= 0.05) {
+      if (this.state === STATE.MP_PLAYING && this.lastInputSend >= MULTIPLAYER_INPUT_SEND_INTERVAL) {
         this.lastInputSend = 0;
         this.multiplayer.sendInput(actions);
       }
@@ -1001,6 +1055,9 @@
       this.mode = "multiplayer";
       this.state = STATE.MP_WAITING;
       this.multiplayerStatus = message;
+      this.multiplayerSnapshot = null;
+      this.multiplayerSnapshots = [];
+      this.serverClockOffset = null;
       this.ui.roomCodeInput.value = roomCode;
       this.updateOverlay();
     }
@@ -1018,7 +1075,18 @@
       if (this.multiplayer.roomCode && snapshot.roomCode !== this.multiplayer.roomCode) return;
       this.mode = "multiplayer";
       this.multiplayerSnapshot = snapshot;
-      this.ping = Math.max(0, Date.now() - snapshot.serverTime);
+      const now = Date.now();
+      const measuredOffset = snapshot.serverTime - now;
+      this.serverClockOffset =
+        this.serverClockOffset === null
+          ? measuredOffset
+          : this.serverClockOffset + (measuredOffset - this.serverClockOffset) * 0.08;
+      this.ping = Math.max(0, now - snapshot.serverTime);
+      this.multiplayerSnapshots.push(snapshot);
+      this.multiplayerSnapshots = this.multiplayerSnapshots
+        .filter((item) => item.roomCode === snapshot.roomCode && now + this.serverClockOffset - item.serverTime < 1200)
+        .sort((a, b) => a.serverTime - b.serverTime)
+        .slice(-12);
       this.processServerEvents(snapshot.events || []);
 
       if (snapshot.gameState === "waiting") this.state = STATE.MP_WAITING;
@@ -1042,12 +1110,81 @@
       }
     }
 
+    getRenderableMultiplayerSnapshot() {
+      if (this.multiplayerSnapshots.length === 0) return this.multiplayerSnapshot;
+      if (this.multiplayerSnapshots.length === 1 || this.serverClockOffset === null) {
+        return this.applyLocalPrediction(this.multiplayerSnapshots[this.multiplayerSnapshots.length - 1]);
+      }
+
+      const renderTime = Date.now() + this.serverClockOffset - MULTIPLAYER_INTERPOLATION_DELAY_MS;
+      let previous = this.multiplayerSnapshots[0];
+      let next = null;
+
+      for (let i = 0; i < this.multiplayerSnapshots.length - 1; i += 1) {
+        const a = this.multiplayerSnapshots[i];
+        const b = this.multiplayerSnapshots[i + 1];
+        if (a.serverTime <= renderTime && b.serverTime >= renderTime) {
+          previous = a;
+          next = b;
+          break;
+        }
+        if (b.serverTime < renderTime) {
+          previous = b;
+        }
+      }
+
+      const baseSnapshot = next
+        ? interpolateSnapshot(
+            previous,
+            next,
+            clamp((renderTime - previous.serverTime) / Math.max(1, next.serverTime - previous.serverTime), 0, 1)
+          )
+        : this.multiplayerSnapshots[this.multiplayerSnapshots.length - 1];
+
+      return this.applyLocalPrediction(baseSnapshot);
+    }
+
+    applyLocalPrediction(snapshot) {
+      if (!snapshot || snapshot.gameState !== "playing" || !this.multiplayer.playerId) return snapshot;
+      const players = snapshot.players || [];
+      const localPlayer = players.find((player) => player.id === this.multiplayer.playerId);
+      if (!localPlayer) return snapshot;
+
+      const direction =
+        (this.currentMultiplayerInput.right ? 1 : 0) - (this.currentMultiplayerInput.left ? 1 : 0);
+      if (direction === 0) return snapshot;
+
+      const serverNow = Date.now() + (this.serverClockOffset || 0);
+      const predictionSeconds =
+        clamp(serverNow - snapshot.serverTime, 0, LOCAL_PREDICTION_MAX_MS) / 1000;
+      if (predictionSeconds <= 0) return snapshot;
+
+      return {
+        ...snapshot,
+        players: players.map((player) => {
+          if (player.id !== this.multiplayer.playerId) return player;
+          const width = player.width || 46;
+          return {
+            ...player,
+            x: clamp(
+              player.x + direction * MULTIPLAYER_PLAYER_SPEED * predictionSeconds,
+              14,
+              WIDTH - width - 14
+            ),
+            facing: direction < 0 ? "left" : "right",
+          };
+        }),
+      };
+    }
+
     handleMultiplayerDisconnect(message) {
       this.multiplayer.leaveRoom();
       this.mode = "single";
       this.state = STATE.MENU;
       this.multiplayerStatus = message;
       this.multiplayerSnapshot = null;
+      this.multiplayerSnapshots = [];
+      this.serverClockOffset = null;
       this.waitingPlayers = [];
       this.updateOverlay();
     }
@@ -1217,7 +1354,7 @@
     }
 
     renderMultiplayer(ctx) {
-      const snapshot = this.multiplayerSnapshot;
+      const snapshot = this.getRenderableMultiplayerSnapshot();
       const platforms = snapshot?.platforms || [];
       const projectiles = snapshot?.projectiles || [];
       const balls = snapshot?.balls || [];
