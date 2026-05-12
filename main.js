@@ -6,10 +6,8 @@
   const FLOOR_Y = HEIGHT - 58;
   const DEFAULT_SOCKET_SERVER = "https://bubblebang.onrender.com";
   const MULTIPLAYER_INTERPOLATION_DELAY_MS = 70;
-  const LOCAL_RECONCILE_DEADBAND = 220;
-  const LOCAL_RECONCILE_SOFTNESS = 0.02;
-  const LOCAL_RECONCILE_IDLE_STRENGTH = 0.12;
-  const LOCAL_RECONCILE_SNAP_DISTANCE = 900;
+  const MULTIPLAYER_INPUT_SEND_INTERVAL_MS = 33;
+  const SERVER_CORRECTION_SNAP_DISTANCE = 360;
   const MULTIPLAYER_PLAYER_SPEED = 360;
   const LOCAL_PROJECTILE_SPEED = 760;
   const LOCAL_SHOT_COOLDOWN = 0.3;
@@ -595,6 +593,11 @@
       this.roomCode = "";
       this.pendingConnectAction = null;
       this.lastInputPayload = "";
+      this.lastInputControlsPayload = "";
+      this.lastInputSentAt = 0;
+      this.lastSentPlayerX = null;
+      this.lastSentPlayerY = null;
+      this.inputSequence = 0;
       this.serverUrl = this.loadServerUrl();
       this.transport = "--";
       this.latencyTimer = null;
@@ -775,10 +778,40 @@
         left: Boolean(input.left),
         right: Boolean(input.right),
         shoot: Boolean(input.shoot),
+        shootPressed: Boolean(input.shootPressed),
       };
-      const encoded = JSON.stringify(payload);
-      if (encoded === this.lastInputPayload) return;
-      this.lastInputPayload = encoded;
+      if (input.player) {
+        payload.x = Math.round(Number(input.player.x) * 100) / 100;
+        payload.y = Math.round(Number(input.player.y) * 100) / 100;
+      }
+
+      const now = performance.now();
+      const controlsPayload = JSON.stringify({
+        left: payload.left,
+        right: payload.right,
+        shoot: payload.shoot,
+        shootPressed: payload.shootPressed,
+      });
+      const controlsChanged = controlsPayload !== this.lastInputControlsPayload;
+      const hasPosition = Number.isFinite(payload.x) && Number.isFinite(payload.y);
+      const positionChanged =
+        hasPosition &&
+        (this.lastSentPlayerX === null ||
+          Math.abs(payload.x - this.lastSentPlayerX) > 0.25 ||
+          Math.abs(payload.y - this.lastSentPlayerY) > 0.25);
+      const positionDue =
+        positionChanged && now - this.lastInputSentAt >= MULTIPLAYER_INPUT_SEND_INTERVAL_MS;
+
+      if (!input.force && !controlsChanged && !payload.shootPressed && !positionDue) return;
+
+      payload.seq = ++this.inputSequence;
+      this.lastInputControlsPayload = controlsPayload;
+      this.lastInputPayload = JSON.stringify(payload);
+      this.lastInputSentAt = now;
+      if (hasPosition) {
+        this.lastSentPlayerX = payload.x;
+        this.lastSentPlayerY = payload.y;
+      }
       this.socket.emit("player_input", payload);
     }
 
@@ -789,6 +822,10 @@
       this.playerId = null;
       this.roomCode = "";
       this.lastInputPayload = "";
+      this.lastInputControlsPayload = "";
+      this.lastInputSentAt = 0;
+      this.lastSentPlayerX = null;
+      this.lastSentPlayerY = null;
     }
 
     restartRoom() {
@@ -1051,15 +1088,89 @@
         shoot: actions.shoot,
       };
       this.localShotCooldown = Math.max(0, this.localShotCooldown - dt);
+      this.updateLocalPlayerControl(dt, actions);
       this.updateLocalProjectiles(dt);
       if (this.state === STATE.MP_PLAYING) {
-        this.multiplayer.sendInput(actions);
-        if (actions.shoot && !this.previousMultiplayerShoot && this.localShotCooldown <= 0) {
+        this.multiplayer.sendInput({
+          ...actions,
+          player: this.getLocalPlayerInputState(),
+        });
+        if (actions.shootPressed && this.localShotCooldown <= 0) {
           this.spawnLocalProjectile();
         }
       }
       this.previousMultiplayerShoot = actions.shoot;
       this.updateHud();
+    }
+
+    updateLocalPlayerControl(dt, actions) {
+      const latestPlayer = this.multiplayerSnapshot?.players?.find(
+        (player) => player.id === this.multiplayer.playerId
+      );
+      if (!latestPlayer) return;
+
+      if (!this.localPlayerVisual || this.localPlayerVisual.id !== latestPlayer.id) {
+        this.syncLocalPlayerVisual(latestPlayer);
+      }
+
+      if (this.state !== STATE.MP_PLAYING) {
+        this.syncLocalPlayerVisual(latestPlayer);
+        return;
+      }
+
+      const direction = (actions.right ? 1 : 0) - (actions.left ? 1 : 0);
+      const width = latestPlayer.width || 46;
+      const oldX = this.localPlayerVisual.x;
+      this.localPlayerVisual.x = clamp(
+        this.localPlayerVisual.x + direction * MULTIPLAYER_PLAYER_SPEED * dt,
+        14,
+        WIDTH - width - 14
+      );
+      this.localPlayerVisual.y = latestPlayer.y;
+      this.localPlayerVisual.width = width;
+      this.localPlayerVisual.height = latestPlayer.height || 58;
+      if (direction !== 0) {
+        this.localPlayerVisual.facing = direction < 0 ? "left" : "right";
+        this.localPlayerVisual.lastMovedAt = performance.now();
+      } else {
+        this.localPlayerVisual.facing = latestPlayer.facing || this.localPlayerVisual.facing || "right";
+      }
+
+      const playerRect = {
+        x: this.localPlayerVisual.x + 5,
+        y: this.localPlayerVisual.y + 6,
+        width: width - 10,
+        height: (latestPlayer.height || 58) - 6,
+      };
+      for (const platform of this.multiplayerSnapshot?.platforms || []) {
+        if (!rectOverlap(playerRect, platform)) continue;
+        if (this.localPlayerVisual.x > oldX) this.localPlayerVisual.x = platform.x - width + 5;
+        if (this.localPlayerVisual.x < oldX) this.localPlayerVisual.x = platform.x + platform.width - 5;
+      }
+    }
+
+    syncLocalPlayerVisual(player) {
+      this.localPlayerVisual = {
+        id: player.id,
+        x: player.x,
+        y: player.y,
+        width: player.width || 46,
+        height: player.height || 58,
+        facing: player.facing || "right",
+        lastMovedAt: 0,
+      };
+    }
+
+    getLocalPlayerInputState() {
+      const latestPlayer = this.multiplayerSnapshot?.players?.find(
+        (player) => player.id === this.multiplayer.playerId
+      );
+      const player = this.localPlayerVisual || latestPlayer;
+      if (!player) return null;
+      return {
+        x: player.x,
+        y: player.y,
+      };
     }
 
     updateLocalProjectiles(dt) {
@@ -1171,7 +1282,18 @@
       if (!snapshot || !snapshot.roomCode) return;
       if (this.multiplayer.roomCode && snapshot.roomCode !== this.multiplayer.roomCode) return;
       this.mode = "multiplayer";
+      const previousSnapshot = this.multiplayerSnapshot;
       this.multiplayerSnapshot = snapshot;
+      const latestLocalPlayer = snapshot.players?.find((player) => player.id === this.multiplayer.playerId);
+      const shouldReseedLocalPlayer =
+        latestLocalPlayer &&
+        (!this.localPlayerVisual ||
+          this.localPlayerVisual.id !== latestLocalPlayer.id ||
+          previousSnapshot?.level !== snapshot.level ||
+          snapshot.gameState !== "playing");
+      if (shouldReseedLocalPlayer) {
+        this.syncLocalPlayerVisual(latestLocalPlayer);
+      }
       const now = Date.now();
       if (this.lastSnapshotArrivedAt !== null) {
         this.networkStats.snapshotMs = Math.round(now - this.lastSnapshotArrivedAt);
@@ -1257,46 +1379,23 @@
       return baseSnapshot;
     }
 
-    getResponsiveLocalPlayer(interpolatedPlayer) {
+    getLocalAuthoritativePlayer(interpolatedPlayer) {
       const latestPlayer = this.multiplayerSnapshot?.players?.find(
         (player) => player.id === this.multiplayer.playerId
       );
       if (!latestPlayer) return interpolatedPlayer;
 
-      const now = performance.now();
       const direction =
         (this.currentMultiplayerInput.right ? 1 : 0) - (this.currentMultiplayerInput.left ? 1 : 0);
 
       if (!this.localPlayerVisual || this.localPlayerVisual.id !== latestPlayer.id) {
-        this.localPlayerVisual = {
-          id: latestPlayer.id,
-          x: latestPlayer.x,
-          y: latestPlayer.y,
-          lastTime: now,
-        };
+        this.syncLocalPlayerVisual(latestPlayer);
       }
 
-      const dt = clamp((now - this.localPlayerVisual.lastTime) / 1000, 0, 1 / 20);
-      this.localPlayerVisual.lastTime = now;
-
-      const width = latestPlayer.width || 46;
-      this.localPlayerVisual.x = clamp(
-        this.localPlayerVisual.x + direction * MULTIPLAYER_PLAYER_SPEED * dt,
-        14,
-        WIDTH - width - 14
-      );
-
-      const error = latestPlayer.x - this.localPlayerVisual.x;
-      const absError = Math.abs(error);
-      if (absError > LOCAL_RECONCILE_SNAP_DISTANCE) {
-        this.localPlayerVisual.x = latestPlayer.x;
-      } else if (direction === 0) {
-        this.localPlayerVisual.x += error * LOCAL_RECONCILE_IDLE_STRENGTH;
-      } else if (absError > LOCAL_RECONCILE_DEADBAND) {
-        const correction = error - Math.sign(error) * LOCAL_RECONCILE_DEADBAND;
-        this.localPlayerVisual.x += correction * LOCAL_RECONCILE_SOFTNESS;
+      const serverError = Math.abs(latestPlayer.x - this.localPlayerVisual.x);
+      if (serverError > SERVER_CORRECTION_SNAP_DISTANCE) {
+        this.syncLocalPlayerVisual(latestPlayer);
       }
-      this.localPlayerVisual.y = latestPlayer.y;
 
       return {
         ...(interpolatedPlayer || latestPlayer),
@@ -1308,7 +1407,7 @@
             ? "left"
             : direction > 0
               ? "right"
-              : latestPlayer.facing || interpolatedPlayer?.facing || "right",
+              : this.localPlayerVisual.facing || latestPlayer.facing || interpolatedPlayer?.facing || "right",
       };
     }
 
@@ -1517,7 +1616,7 @@
       }
       for (const player of players) {
         const isLocal = player.id === this.multiplayer.playerId;
-        const renderPlayer = isLocal ? this.getResponsiveLocalPlayer(player) : player;
+        const renderPlayer = isLocal ? this.getLocalAuthoritativePlayer(player) : player;
         renderPlayerShape(ctx, renderPlayer, {
           primary: isLocal ? "#77f3ff" : "#ffd166",
           accent: isLocal ? "#ff5bc8" : "#8cff82",

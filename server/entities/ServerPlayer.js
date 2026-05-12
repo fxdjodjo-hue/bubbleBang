@@ -6,6 +6,8 @@ const {
   PLAYER_WIDTH,
   PLAYER_HEIGHT,
   PLAYER_SPEED,
+  CLIENT_POSITION_TOLERANCE,
+  CLIENT_POSITION_STALE_MS,
   SHOOT_COOLDOWN,
 } = require("../config");
 const { clamp, rectOverlap } = require("../collision");
@@ -24,6 +26,9 @@ class ServerPlayer {
     this.invulnerable = 1.2;
     this.hitCooldown = 0;
     this.shootCooldown = 0;
+    this.lastClientPositionAt = 0;
+    this.clientPositionActiveUntil = 0;
+    this.lastInputSeq = 0;
     this.resetPosition();
   }
 
@@ -31,6 +36,8 @@ class ServerPlayer {
     const spawnX = this.slot === 0 ? WIDTH * 0.42 : WIDTH * 0.58;
     this.x = spawnX - this.width * 0.5;
     this.y = FLOOR_Y - this.height;
+    this.lastClientPositionAt = Date.now();
+    this.clientPositionActiveUntil = 0;
   }
 
   get rect() {
@@ -51,11 +58,22 @@ class ServerPlayer {
   }
 
   setInput(input) {
+    const shootPressed = Boolean(input && input.shootPressed);
     this.input = {
       left: Boolean(input && input.left),
       right: Boolean(input && input.right),
       shoot: Boolean(input && input.shoot),
+      shootPressed: this.input.shootPressed || shootPressed,
     };
+
+    if (Number.isFinite(input?.seq)) {
+      this.lastInputSeq = Math.max(this.lastInputSeq, Number(input.seq));
+    }
+
+    const clientX = Number(input && input.x);
+    if (Number.isFinite(clientX)) {
+      this.applyClientPosition(clientX);
+    }
   }
 
   update(dt, platforms) {
@@ -66,6 +84,8 @@ class ServerPlayer {
     const direction = (this.input.right ? 1 : 0) - (this.input.left ? 1 : 0);
     if (direction < 0) this.facing = "left";
     if (direction > 0) this.facing = "right";
+
+    if (Date.now() <= this.clientPositionActiveUntil) return;
 
     const oldX = this.x;
     this.x += direction * this.speed * dt;
@@ -79,12 +99,39 @@ class ServerPlayer {
     }
   }
 
+  applyClientPosition(clientX) {
+    const now = Date.now();
+    const minX = 14;
+    const maxX = WIDTH - this.width - 14;
+    const targetX = clamp(clientX, minX, maxX);
+
+    const elapsed = clamp((now - this.lastClientPositionAt) / 1000, 0, 0.25);
+    const maxStep = this.speed * elapsed + CLIENT_POSITION_TOLERANCE;
+    const delta = targetX - this.x;
+    this.x =
+      Math.abs(delta) > maxStep
+        ? clamp(this.x + Math.sign(delta) * maxStep, minX, maxX)
+        : targetX;
+
+    this.y = FLOOR_Y - this.height;
+    this.lastClientPositionAt = now;
+    this.clientPositionActiveUntil = now + CLIENT_POSITION_STALE_MS;
+  }
+
+  wantsToShoot() {
+    return Boolean(this.input.shootPressed);
+  }
+
   canShoot() {
-    return this.input.shoot && this.shootCooldown <= 0;
+    return this.shootCooldown <= 0;
   }
 
   markShot() {
     this.shootCooldown = SHOOT_COOLDOWN;
+  }
+
+  consumeShootRequest() {
+    this.input.shootPressed = false;
   }
 
   takeHit() {

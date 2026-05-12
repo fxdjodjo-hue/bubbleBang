@@ -102,7 +102,7 @@ class GameRoom {
       player.invulnerable = 1.2;
       player.hitCooldown = 0;
       player.shootCooldown = 0;
-      player.input = { left: false, right: false, shoot: false };
+      player.input = { left: false, right: false, shoot: false, shootPressed: false };
     }
   }
 
@@ -139,10 +139,15 @@ class GameRoom {
 
     for (const player of this.players.values()) {
       player.update(dt, this.platforms);
-      if (player.canShoot() && !this.projectiles.some((projectile) => projectile.ownerId === player.id)) {
-        this.projectiles.push(new ServerProjectile(this.createId("projectile"), player.id, player.shootX, player.shootY));
-        player.markShot();
-        this.events.push({ type: "shoot", playerId: player.id, x: player.shootX, y: player.shootY });
+      if (player.wantsToShoot()) {
+        if (player.canShoot() && !this.projectiles.some((projectile) => projectile.ownerId === player.id)) {
+          this.projectiles.push(
+            new ServerProjectile(this.createId("projectile"), player.id, player.shootX, player.shootY)
+          );
+          player.markShot();
+          this.events.push({ type: "shoot", playerId: player.id, x: player.shootX, y: player.shootY });
+        }
+        player.consumeShootRequest();
       }
     }
 
