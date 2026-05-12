@@ -152,6 +152,7 @@ class ServerPlayer {
       facing: this.facing,
       isShooting: this.shootCooldown > SHOOT_COOLDOWN - 0.12,
       invulnerable: this.invulnerable > 0,
+      invulnerableTime: this.invulnerable,
       connected: this.connected,
     };
   }

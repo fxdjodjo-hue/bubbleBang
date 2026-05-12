@@ -171,6 +171,7 @@
         ...to,
         x: lerp(from.x, to.x, t),
         y: lerp(from.y, to.y, t),
+        invulnerableTime: to.invulnerableTime ?? from.invulnerableTime ?? 0,
       })),
       balls: interpolateById(previous.balls || [], next.balls || [], amount, (from, to, t) => ({
         ...to,
@@ -286,6 +287,8 @@
       this.width = 46;
       this.height = 58;
       this.speed = 360;
+      this.facing = "right";
+      this.isWalking = false;
       this.resetForRun();
     }
 
@@ -294,6 +297,8 @@
       this.resetPosition();
       this.invulnerable = 0;
       this.hitCooldown = 0;
+      this.facing = "right";
+      this.isWalking = false;
     }
 
     resetPosition() {
@@ -318,7 +323,11 @@
       this.invulnerable = Math.max(0, this.invulnerable - dt);
       this.hitCooldown = Math.max(0, this.hitCooldown - dt);
       const oldX = this.x;
-      this.x += input.move * this.speed * dt;
+      const direction = input.move;
+      if (direction < 0) this.facing = "left";
+      if (direction > 0) this.facing = "right";
+      this.isWalking = direction !== 0;
+      this.x += direction * this.speed * dt;
       this.x = clamp(this.x, 14, WIDTH - this.width - 14);
 
       const playerRect = this.rect;
@@ -337,16 +346,28 @@
       return true;
     }
 
-    render(ctx) {
-      renderPlayerShape(ctx, {
-        id: "single-player",
-        nickname: "",
-        x: this.x,
-        y: this.y,
-        width: this.width,
-        height: this.height,
-        invulnerable: this.invulnerable > 0,
-      }, { primary: "#77f3ff", accent: "#ff5bc8", showName: false });
+    render(ctx, options = {}) {
+      renderPlayerShape(
+        ctx,
+        {
+          id: "single-player",
+          nickname: "",
+          x: this.x,
+          y: this.y,
+          width: this.width,
+          height: this.height,
+          invulnerable: this.invulnerable,
+        },
+        {
+          primary: "#77f3ff",
+          accent: "#ff5bc8",
+          showName: false,
+          facing: this.facing,
+          isWalking: this.isWalking,
+          hasProjectile: Boolean(options.projectile),
+          pose: options.pose || null,
+        }
+      );
     }
   }
 
@@ -890,12 +911,16 @@
       this.lastSnapshotArrivedAt = null;
       this.waitingPlayers = [];
       this.ping = null;
+      this.prevMultiplayerRenderX = new Map();
 
       this.bindMenuButtons();
       this.ui.socketUrlInput.value = this.multiplayer.serverUrl || this.multiplayer.url;
       window.addEventListener("resize", () => this.fitCanvas());
       window.addEventListener("orientationchange", () => this.fitCanvas());
       this.fitCanvas();
+      if (typeof BubbleBangSprites !== "undefined") {
+        BubbleBangSprites.loadSpriteSheet();
+      }
       this.updateOverlay();
       requestAnimationFrame((time) => this.loop(time));
     }
@@ -992,6 +1017,7 @@
       this.localProjectiles = [];
       this.previousMultiplayerShoot = false;
       this.localShotCooldown = 0;
+      this.prevMultiplayerRenderX.clear();
       this.waitingPlayers = [];
       this.updateOverlay();
     }
@@ -1007,6 +1033,7 @@
       this.localProjectiles = [];
       this.previousMultiplayerShoot = false;
       this.localShotCooldown = 0;
+      this.prevMultiplayerRenderX.clear();
       this.waitingPlayers = [];
       this.updateOverlay();
     }
@@ -1266,6 +1293,7 @@
       this.localProjectiles = [];
       this.previousMultiplayerShoot = false;
       this.localShotCooldown = 0;
+      this.prevMultiplayerRenderX.clear();
       this.ui.roomCodeInput.value = roomCode;
       this.updateOverlay();
     }
@@ -1423,6 +1451,7 @@
       this.localProjectiles = [];
       this.previousMultiplayerShoot = false;
       this.localShotCooldown = 0;
+      this.prevMultiplayerRenderX.clear();
       this.waitingPlayers = [];
       this.updateOverlay();
     }
@@ -1590,7 +1619,15 @@
       for (const ball of this.balls) {
         ball.render(ctx);
       }
-      this.player.render(ctx);
+      this.player.render(ctx, {
+        projectile: this.projectile,
+        pose:
+          this.state === STATE.LEVEL_COMPLETE || this.state === STATE.DEMO_COMPLETE
+            ? "victory"
+            : this.state === STATE.GAME_OVER
+              ? "defeat"
+              : null,
+      });
     }
 
     renderMultiplayer(ctx) {
@@ -1599,6 +1636,12 @@
       const projectiles = snapshot?.projectiles || [];
       const balls = snapshot?.balls || [];
       const players = snapshot?.players || [];
+      const pose =
+        snapshot?.gameState === "levelComplete"
+          ? "victory"
+          : snapshot?.gameState === "gameOver"
+            ? "defeat"
+            : null;
 
       for (const platform of platforms) {
         this.renderPlatform(ctx, platform);
@@ -1617,11 +1660,29 @@
       for (const player of players) {
         const isLocal = player.id === this.multiplayer.playerId;
         const renderPlayer = isLocal ? this.getLocalAuthoritativePlayer(player) : player;
+        const prevX = this.prevMultiplayerRenderX.get(renderPlayer.id);
+        this.prevMultiplayerRenderX.set(renderPlayer.id, renderPlayer.x);
+        const direction =
+          (this.currentMultiplayerInput.right ? 1 : 0) - (this.currentMultiplayerInput.left ? 1 : 0);
+        const isWalking = isLocal
+          ? direction !== 0
+          : prevX != null && Math.abs(renderPlayer.x - prevX) > 0.35;
+        const hasProjectile =
+          projectiles.some((projectile) => projectile.ownerId === renderPlayer.id) ||
+          this.localProjectiles.some((projectile) => projectile.ownerId === renderPlayer.id);
         renderPlayerShape(ctx, renderPlayer, {
           primary: isLocal ? "#77f3ff" : "#ffd166",
           accent: isLocal ? "#ff5bc8" : "#8cff82",
           showName: true,
+          facing: renderPlayer.facing || "right",
+          isWalking,
+          hasProjectile,
+          pose,
         });
+      }
+      const activeIds = new Set(players.map((p) => p.id));
+      for (const key of this.prevMultiplayerRenderX.keys()) {
+        if (!activeIds.has(key)) this.prevMultiplayerRenderX.delete(key);
       }
     }
 
@@ -1744,7 +1805,13 @@
   }
 
   function renderPlayerShape(ctx, player, options) {
-    const blink = player.invulnerable && Math.floor(performance.now() / 70) % 2 === 0;
+    if (typeof BubbleBangSprites !== "undefined" && BubbleBangSprites.renderPlayerSprite) {
+      BubbleBangSprites.renderPlayerSprite(ctx, player, options);
+      return;
+    }
+
+    const blink =
+      resolvePlayerInvulnSeconds(player) > 0 && Math.floor(performance.now() / 70) % 2 === 0;
     if (blink) return;
     const primary = options.primary;
     const accent = options.accent;
@@ -1786,6 +1853,19 @@
       ctx.fillText(player.nickname, textX, textY);
       ctx.restore();
     }
+  }
+
+  function resolvePlayerInvulnSeconds(player) {
+    if (typeof player.invulnerableTime === "number" && player.invulnerableTime > 0) {
+      return player.invulnerableTime;
+    }
+    if (typeof player.invulnerable === "number" && player.invulnerable > 0) {
+      return player.invulnerable;
+    }
+    if (player.invulnerable === true) {
+      return 1.5;
+    }
+    return 0;
   }
 
   function roundRect(ctx, x, y, width, height, radius) {
