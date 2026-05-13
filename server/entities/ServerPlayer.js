@@ -6,8 +6,6 @@ const {
   PLAYER_WIDTH,
   PLAYER_HEIGHT,
   PLAYER_SPEED,
-  CLIENT_POSITION_TOLERANCE,
-  CLIENT_POSITION_STALE_MS,
   SHOOT_COOLDOWN,
   POWERUP_DOUBLE_SHOT,
 } = require("../config");
@@ -31,8 +29,6 @@ class ServerPlayer {
     this.hitCooldown = 0;
     this.shootCooldown = 0;
     this.powerUps = { [POWERUP_DOUBLE_SHOT]: 0 };
-    this.lastClientPositionAt = 0;
-    this.clientPositionActiveUntil = 0;
     this.lastInputSeq = 0;
     this.resetPosition();
   }
@@ -43,8 +39,6 @@ class ServerPlayer {
     this.y = FLOOR_Y - this.height;
     this.vy = 0;
     this.onGround = true;
-    this.lastClientPositionAt = Date.now();
-    this.clientPositionActiveUntil = 0;
   }
 
   get rect() {
@@ -76,11 +70,6 @@ class ServerPlayer {
     if (Number.isFinite(input?.seq)) {
       this.lastInputSeq = Math.max(this.lastInputSeq, Number(input.seq));
     }
-
-    const clientX = Number(input && input.x);
-    if (Number.isFinite(clientX)) {
-      this.applyClientPosition(clientX);
-    }
   }
 
   update(dt, platforms) {
@@ -93,48 +82,25 @@ class ServerPlayer {
     if (direction < 0) this.facing = "left";
     if (direction > 0) this.facing = "right";
 
-    const useClientX = Date.now() <= this.clientPositionActiveUntil;
-    if (!useClientX) {
-      const oldX = this.x;
-      this.x += direction * this.speed * dt;
-      this.x = clamp(this.x, 14, WIDTH - this.width - 14);
+    const oldX = this.x;
+    this.x += direction * this.speed * dt;
+    this.x = clamp(this.x, 14, WIDTH - this.width - 14);
 
-      const playerRect = this.rect;
-      for (const platform of platforms) {
-        if (!rectOverlap(playerRect, platform)) continue;
-        if (this.x > oldX) this.x = platform.x - this.width + 5;
-        if (this.x < oldX) this.x = platform.x + platform.width - 5;
-      }
+    const playerRect = this.rect;
+    for (const platform of platforms) {
+      if (!rectOverlap(playerRect, platform)) continue;
+      if (this.x > oldX) this.x = platform.x - this.width + 5;
+      if (this.x < oldX) this.x = platform.x + platform.width - 5;
     }
 
     applyPlayerVertical(this, dt, this.input, platforms);
-    if (!useClientX) {
-      const playerRect = this.rect;
-      const oldX = this.x;
-      for (const platform of platforms) {
-        if (!rectOverlap(playerRect, platform)) continue;
-        if (this.x > oldX) this.x = platform.x - this.width + 5;
-        if (this.x < oldX) this.x = platform.x + platform.width - 5;
-      }
+    const oldX2 = this.x;
+    const playerRect2 = this.rect;
+    for (const platform of platforms) {
+      if (!rectOverlap(playerRect2, platform)) continue;
+      if (this.x > oldX2) this.x = platform.x - this.width + 5;
+      if (this.x < oldX2) this.x = platform.x + platform.width - 5;
     }
-  }
-
-  applyClientPosition(clientX) {
-    const now = Date.now();
-    const minX = 14;
-    const maxX = WIDTH - this.width - 14;
-    const targetX = clamp(clientX, minX, maxX);
-
-    const elapsed = clamp((now - this.lastClientPositionAt) / 1000, 0, 0.25);
-    const maxStep = this.speed * elapsed + CLIENT_POSITION_TOLERANCE;
-    const delta = targetX - this.x;
-    this.x =
-      Math.abs(delta) > maxStep
-        ? clamp(this.x + Math.sign(delta) * maxStep, minX, maxX)
-        : targetX;
-
-    this.lastClientPositionAt = now;
-    this.clientPositionActiveUntil = now + CLIENT_POSITION_STALE_MS;
   }
 
   wantsToShoot() {
@@ -196,6 +162,7 @@ class ServerPlayer {
       invulnerable: this.invulnerable > 0,
       invulnerableTime: this.invulnerable,
       connected: this.connected,
+      lastProcessedInputSeq: this.lastInputSeq,
     };
   }
 }

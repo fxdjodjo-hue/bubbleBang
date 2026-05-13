@@ -4,7 +4,8 @@ const path = require("path");
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
-const { RoomManager, sanitizeRoomCode } = require("./RoomManager");
+const { EVENTS, sanitizeRoomCode } = require("../shared/protocol");
+const { RoomManager } = require("./RoomManager");
 
 const PORT = Number(process.env.PORT || 3001);
 const app = express();
@@ -26,29 +27,29 @@ app.get("/health", (_request, response) => {
 const rooms = new RoomManager(io);
 
 io.on("connection", (socket) => {
-  socket.on("create_room", (payload = {}) => {
+  socket.on(EVENTS.CREATE_ROOM, (payload = {}) => {
     rooms.leaveRoom(socket, true);
     rooms.createRoom(socket, payload.nickname);
   });
 
-  socket.on("join_room", (payload = {}) => {
+  socket.on(EVENTS.JOIN_ROOM, (payload = {}) => {
     rooms.leaveRoom(socket, true);
     rooms.joinRoom(socket, sanitizeRoomCode(payload.roomCode), payload.nickname);
   });
 
-  socket.on("player_input", (payload = {}) => {
+  socket.on(EVENTS.PLAYER_INPUT, (payload = {}) => {
     rooms.handleInput(socket, payload);
   });
 
-  socket.on("latency_probe", (_payload = {}, ack) => {
+  socket.on(EVENTS.LATENCY_PROBE, (_payload = {}, ack) => {
     if (typeof ack === "function") ack({ serverTime: Date.now() });
   });
 
-  socket.on("leave_room", () => {
+  socket.on(EVENTS.LEAVE_ROOM, () => {
     rooms.leaveRoom(socket);
   });
 
-  socket.on("restart_room", () => {
+  socket.on(EVENTS.RESTART_ROOM, () => {
     rooms.restartRoom(socket);
   });
 

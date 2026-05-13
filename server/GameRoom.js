@@ -13,6 +13,7 @@ const {
   POWERUP_DROP_CHANCE,
   HEART_DROP_CHANCE,
 } = require("./config");
+const { EVENTS, PROTOCOL_VERSION } = require("../shared/protocol");
 const { LEVELS } = require("./levels");
 const { circleRectOverlap, lineCircleOverlap, rectOverlap } = require("./collision");
 const ServerPlayer = require("./entities/ServerPlayer");
@@ -94,7 +95,7 @@ class GameRoom {
     this.loadLevel();
     this.countdown = 3.2;
     this.gameState = "countdown";
-    this.io.to(this.code).emit("countdown", { value: 3 });
+    this.io.to(this.code).emit(EVENTS.COUNTDOWN, { value: 3 });
     this.broadcastWaiting();
   }
 
@@ -296,7 +297,7 @@ class GameRoom {
         if (this.teamLives <= 0) {
           this.teamLives = 0;
           this.gameState = "gameOver";
-          this.io.to(this.code).emit("game_over", { score: this.score });
+          this.io.to(this.code).emit(EVENTS.GAME_OVER, { score: this.score });
         }
         return;
       }
@@ -312,7 +313,7 @@ class GameRoom {
     if (this.teamLives <= 0) {
       this.teamLives = 0;
       this.gameState = "gameOver";
-      this.io.to(this.code).emit("game_over", { score: this.score });
+      this.io.to(this.code).emit(EVENTS.GAME_OVER, { score: this.score });
       return;
     }
     this.loadLevel();
@@ -332,7 +333,7 @@ class GameRoom {
     this.gameState = "levelComplete";
     this.demoComplete = this.levelIndex >= LEVELS.length - 1;
     this.levelCompleteTimer = 2.2;
-    this.io.to(this.code).emit("level_complete", {
+    this.io.to(this.code).emit(EVENTS.LEVEL_COMPLETE, {
       level: this.levelIndex + 1,
       score: this.score,
       demoComplete: this.demoComplete,
@@ -344,7 +345,7 @@ class GameRoom {
   }
 
   broadcastWaiting() {
-    this.io.to(this.code).emit("waiting_for_player", {
+    this.io.to(this.code).emit(EVENTS.WAITING_FOR_PLAYER, {
       roomCode: this.code,
       players: [...this.players.values()].map((player) => player.snapshot()),
     });
@@ -354,12 +355,13 @@ class GameRoom {
     if (this.players.size === 0) return;
     const events = this.events;
     this.events = [];
-    this.io.to(this.code).emit("snapshot", this.snapshot(events));
+    this.io.to(this.code).emit(EVENTS.SNAPSHOT, this.snapshot(events));
   }
 
   snapshot(events = []) {
     return {
       type: "snapshot",
+      protocolVersion: PROTOCOL_VERSION,
       serverTime: Date.now(),
       roomCode: this.code,
       gameState: this.gameState,
