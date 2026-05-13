@@ -3,8 +3,6 @@
 const {
   TICK_RATE,
   SNAPSHOT_RATE,
-  TEAM_LIVES,
-  TEAM_MAX_LIVES,
   LEVEL_TIME_SECONDS,
   LEVEL_CLEAR_TIME_BONUS,
   POWERUP_DOUBLE_SHOT,
@@ -29,7 +27,6 @@ class GameRoom {
     this.players = new Map();
     this.levelIndex = 0;
     this.score = 0;
-    this.teamLives = TEAM_LIVES;
     this.gameState = "waiting";
     this.countdown = null;
     this.demoComplete = false;
@@ -87,10 +84,9 @@ class GameRoom {
   startCountdown() {
     this.levelIndex = 0;
     this.score = 0;
-    this.teamLives = TEAM_LIVES;
     this.demoComplete = false;
     for (const player of this.players.values()) {
-      player.resetPowerUps();
+      player.resetForRun();
     }
     this.loadLevel();
     this.countdown = 3.2;
@@ -119,7 +115,7 @@ class GameRoom {
     this.levelCompleteTimer = 0;
     for (const player of this.players.values()) {
       player.resetPosition();
-      player.invulnerable = 1.2;
+      player.invulnerable = player.isAlive ? 1.2 : 0;
       player.hitCooldown = 0;
       player.shootCooldown = 0;
       player.vy = 0;
@@ -233,7 +229,10 @@ class GameRoom {
       (player) => player.powerUps[POWERUP_DOUBLE_SHOT] > 0
     );
     const candidates = [];
-    if (this.teamLives < TEAM_MAX_LIVES) {
+    const anyPlayerCanUseHeart = [...this.players.values()].some(
+      (player) => player.isAlive && player.lives < player.maxLives
+    );
+    if (anyPlayerCanUseHeart) {
       candidates.push({ type: POWERUP_HEART, chance: HEART_DROP_CHANCE });
     }
     if (!hasActiveDoubleShot) {
@@ -264,9 +263,10 @@ class GameRoom {
     for (let powerUpIndex = this.powerUps.length - 1; powerUpIndex >= 0; powerUpIndex -= 1) {
       const powerUp = this.powerUps[powerUpIndex];
       for (const player of this.players.values()) {
+        if (!player.isAlive) continue;
         if (!rectOverlap(powerUp.rect, player.rect)) continue;
         if (powerUp.type === POWERUP_HEART) {
-          this.teamLives = Math.min(TEAM_MAX_LIVES, this.teamLives + 1);
+          player.heal();
           this.score += 300;
         } else {
           player.activatePowerUp(powerUp.type, POWERUP_DURATION);
@@ -288,14 +288,19 @@ class GameRoom {
   handlePlayerCollisions() {
     for (const ball of this.balls) {
       for (const player of this.players.values()) {
+        if (!player.isAlive) continue;
         if (!circleRectOverlap(ball, player.rect)) continue;
         if (!player.takeHit()) continue;
-        this.teamLives -= 1;
         this.projectiles = this.projectiles.filter((projectile) => projectile.ownerId !== player.id);
         this.powerUps = [];
-        this.events.push({ type: "player_hit", playerId: player.id, x: player.shootX, y: player.y + 25 });
-        if (this.teamLives <= 0) {
-          this.teamLives = 0;
+        this.events.push({
+          type: "player_hit",
+          playerId: player.id,
+          x: player.shootX,
+          y: player.y + 25,
+          lives: player.lives,
+        });
+        if (this.allPlayersDefeated()) {
           this.gameState = "gameOver";
           this.io.to(this.code).emit(EVENTS.GAME_OVER, { score: this.score });
         }
@@ -305,13 +310,11 @@ class GameRoom {
   }
 
   handleLevelTimeout() {
-    this.teamLives -= 1;
     this.events.push({ type: "timer_expired", x: 480, y: 220 });
     for (const player of this.players.values()) {
-      player.resetPowerUps();
+      player.loseLife();
     }
-    if (this.teamLives <= 0) {
-      this.teamLives = 0;
+    if (this.allPlayersDefeated()) {
       this.gameState = "gameOver";
       this.io.to(this.code).emit(EVENTS.GAME_OVER, { score: this.score });
       return;
@@ -341,7 +344,11 @@ class GameRoom {
   }
 
   playerRects() {
-    return [...this.players.values()].map((player) => player.rect);
+    return [...this.players.values()].filter((player) => player.isAlive).map((player) => player.rect);
+  }
+
+  allPlayersDefeated() {
+    return this.players.size > 0 && [...this.players.values()].every((player) => !player.isAlive);
   }
 
   broadcastWaiting() {
@@ -368,8 +375,6 @@ class GameRoom {
       countdown: this.countdown === null ? null : Math.max(0, Math.ceil(this.countdown)),
       level: this.levelIndex + 1,
       score: this.score,
-      teamLives: this.teamLives,
-      teamMaxLives: TEAM_MAX_LIVES,
       timeLeft: this.levelTimeLeft,
       demoComplete: this.demoComplete,
       players: [...this.players.values()].map((player) => player.snapshot()),

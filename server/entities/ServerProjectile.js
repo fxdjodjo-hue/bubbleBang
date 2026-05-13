@@ -10,7 +10,7 @@ class ServerProjectile {
     this.x = x;
     this.y = y;
     this.originY = y;
-    this.width = 7;
+    this.width = 10;
     this.height = 0;
     this.speed = PROJECTILE_SPEED;
     this.active = true;

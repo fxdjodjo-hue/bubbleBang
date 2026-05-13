@@ -11,6 +11,8 @@
   const SERVER_RECONCILE_SMOOTHING = 0.55;
   const MULTIPLAYER_PLAYER_SPEED = 360;
   const LOCAL_PROJECTILE_SPEED = 760;
+  const LOCAL_PROJECTILE_PREVIEW_SECONDS = 0.14;
+  const LOCAL_PROJECTILE_PREVIEW_MAX_HEIGHT = 88;
   const LOCAL_SHOT_COOLDOWN = 0.3;
   const PLAYER_GRAVITY = 2180;
   const PLAYER_CEILING_Y = 8;
@@ -1679,7 +1681,7 @@
       this.localShotCooldown = Math.max(0, this.localShotCooldown - dt);
       this.updateLocalPlayerControl(dt, actions);
       this.updateLocalProjectiles(dt);
-      if (this.state === STATE.MP_PLAYING) {
+      if (this.state === STATE.MP_PLAYING && this.isLocalMultiplayerPlayerAlive()) {
         this.queuePredictionFrame(dt, actions);
         const sentInput = this.multiplayer.sendInput({
           ...actions,
@@ -1705,7 +1707,7 @@
         this.syncLocalPlayerVisual(latestPlayer);
       }
 
-      if (this.state !== STATE.MP_PLAYING) {
+      if (this.state !== STATE.MP_PLAYING || latestPlayer.isAlive === false || latestPlayer.lives <= 0) {
         this.syncLocalPlayerVisual(latestPlayer);
         return;
       }
@@ -1827,6 +1829,16 @@
       };
     }
 
+    isLocalMultiplayerPlayerAlive() {
+      const localPlayer = this.multiplayerSnapshot?.players?.find(
+        (player) => player.id === this.multiplayer.playerId
+      );
+      return (
+        !localPlayer ||
+        (localPlayer.isAlive !== false && (localPlayer.lives === undefined || localPlayer.lives > 0))
+      );
+    }
+
     reconcileLocalPlayer(authoritativePlayer, platforms) {
       if (!authoritativePlayer || !this.localPlayerVisual) return;
       const acknowledgedSeq = Math.max(0, Math.floor(Number(authoritativePlayer.lastProcessedInputSeq) || 0));
@@ -1862,11 +1874,21 @@
     }
 
     updateLocalProjectiles(dt) {
+      const serverProjectileOwners = new Set(
+        (this.multiplayerSnapshot?.projectiles || []).map((projectile) => projectile.ownerId)
+      );
       for (const projectile of this.localProjectiles) {
-        projectile.y -= LOCAL_PROJECTILE_SPEED * dt;
-        projectile.height = projectile.originY - projectile.y;
+        projectile.age += dt;
+        projectile.height = Math.min(
+          LOCAL_PROJECTILE_PREVIEW_MAX_HEIGHT,
+          projectile.height + LOCAL_PROJECTILE_SPEED * dt
+        );
+        projectile.y = projectile.originY - projectile.height;
       }
-      this.localProjectiles = this.localProjectiles.filter((projectile) => projectile.y > 20);
+      this.localProjectiles = this.localProjectiles.filter(
+        (projectile) =>
+          projectile.age <= LOCAL_PROJECTILE_PREVIEW_SECONDS && !serverProjectileOwners.has(projectile.ownerId)
+      );
     }
 
     spawnLocalProjectile() {
@@ -1874,6 +1896,7 @@
         (candidate) => candidate.id === this.multiplayer.playerId
       );
       if (!player) return;
+      if (player.isAlive === false || player.lives <= 0) return;
       const maxProjectiles = player.powerUps?.[POWERUP_DOUBLE_SHOT] > 0 ? 2 : 1;
       const localCount = this.localProjectiles.filter(
         (projectile) => projectile.ownerId === this.multiplayer.playerId
@@ -1893,6 +1916,7 @@
         y: player.y + 14,
         originY: player.y + 14,
         height: 0,
+        age: 0,
       });
       this.localShotCooldown = LOCAL_SHOT_COOLDOWN;
     }
@@ -2179,10 +2203,17 @@
       if (isMultiplayerState(this.state) && this.multiplayerSnapshot) {
         const snapshot = this.multiplayerSnapshot;
         const localPlayer = snapshot.players?.find((player) => player.id === this.multiplayer.playerId);
+        const otherPlayer = snapshot.players?.find((player) => player.id !== this.multiplayer.playerId);
         const doubleTime = Math.ceil(localPlayer?.powerUps?.[POWERUP_DOUBLE_SHOT] || 0);
         const timeLeft = Math.ceil(snapshot.timeLeft ?? LEVEL_TIME_SECONDS);
+        const localLives = localPlayer
+          ? `${Math.max(0, localPlayer.lives ?? 0)}/${localPlayer.maxLives || MAX_PLAYER_LIVES}`
+          : "--";
+        const otherLives = otherPlayer
+          ? ` Ally ${Math.max(0, otherPlayer.lives ?? 0)}/${otherPlayer.maxLives || MAX_PLAYER_LIVES}`
+          : "";
         this.hud.level.textContent = `Room ${snapshot.roomCode} - L${snapshot.level}`;
-        this.hud.lives.textContent = `Team Lives ${Math.max(0, snapshot.teamLives)}/${snapshot.teamMaxLives || MAX_PLAYER_LIVES}`;
+        this.hud.lives.textContent = `You ${localLives}${otherLives}`;
         this.hud.time.textContent = `Time ${timeLeft}`;
         this.hud.balls.textContent = `Balls ${snapshot.balls.length}`;
         this.hud.power.textContent = `Double ${doubleTime}`;
@@ -2299,7 +2330,10 @@
         const name = document.createElement("span");
         name.textContent = `${player.nickname || "Player"}${player.id === this.multiplayer.playerId ? " (You)" : ""}`;
         const status = document.createElement("span");
-        status.textContent = player.connected === false ? "Offline" : "Ready";
+        const lives =
+          player.lives === undefined ? "" : ` ${Math.max(0, player.lives)}/${player.maxLives || MAX_PLAYER_LIVES}`;
+        status.textContent =
+          player.connected === false ? "Offline" : player.isAlive === false ? `Out${lives}` : `Ready${lives}`;
         row.append(name, status);
         this.ui.playerList.appendChild(row);
       }
@@ -2366,9 +2400,7 @@
       for (const platform of platforms) {
         this.renderPlatform(ctx, platform);
       }
-      const localProjectileOwners = new Set(this.localProjectiles.map((projectile) => projectile.ownerId));
       for (const projectile of projectiles) {
-        if (localProjectileOwners.has(projectile.ownerId)) continue;
         renderProjectileLine(ctx, projectile.x, projectile.y, projectile.y + projectile.height);
       }
       for (const projectile of this.localProjectiles) {
@@ -2387,12 +2419,18 @@
         this.prevMultiplayerRenderX.set(renderPlayer.id, renderPlayer.x);
         const direction =
           (this.currentMultiplayerInput.right ? 1 : 0) - (this.currentMultiplayerInput.left ? 1 : 0);
-        const isWalking = isLocal
-          ? direction !== 0
-          : prevX != null && Math.abs(renderPlayer.x - prevX) > 0.35;
+        const renderPlayerAlive =
+          renderPlayer.isAlive !== false && (renderPlayer.lives === undefined || renderPlayer.lives > 0);
+        const isWalking = renderPlayerAlive
+          ? isLocal
+            ? direction !== 0
+            : prevX != null && Math.abs(renderPlayer.x - prevX) > 0.35
+          : false;
         const hasProjectile =
-          projectiles.some((projectile) => projectile.ownerId === renderPlayer.id) ||
-          this.localProjectiles.some((projectile) => projectile.ownerId === renderPlayer.id);
+          renderPlayerAlive &&
+          (projectiles.some((projectile) => projectile.ownerId === renderPlayer.id) ||
+            this.localProjectiles.some((projectile) => projectile.ownerId === renderPlayer.id));
+        const playerPose = renderPlayerAlive ? pose : "defeat";
         renderPlayerShape(ctx, renderPlayer, {
           primary: isLocal ? "#77f3ff" : "#ffd166",
           accent: isLocal ? "#ff5bc8" : "#8cff82",
@@ -2400,7 +2438,7 @@
           facing: renderPlayer.facing || "right",
           isWalking,
           hasProjectile,
-          pose,
+          pose: playerPose,
           onGround: renderPlayer.onGround !== false,
         });
       }

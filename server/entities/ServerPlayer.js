@@ -6,6 +6,8 @@ const {
   PLAYER_WIDTH,
   PLAYER_HEIGHT,
   PLAYER_SPEED,
+  PLAYER_LIVES,
+  PLAYER_MAX_LIVES,
   SHOOT_COOLDOWN,
   POWERUP_DOUBLE_SHOT,
 } = require("../config");
@@ -28,6 +30,8 @@ class ServerPlayer {
     this.invulnerable = 1.2;
     this.hitCooldown = 0;
     this.shootCooldown = 0;
+    this.lives = PLAYER_LIVES;
+    this.maxLives = PLAYER_MAX_LIVES;
     this.powerUps = { [POWERUP_DOUBLE_SHOT]: 0 };
     this.lastInputSeq = 0;
     this.resetPosition();
@@ -39,6 +43,21 @@ class ServerPlayer {
     this.y = FLOOR_Y - this.height;
     this.vy = 0;
     this.onGround = true;
+  }
+
+  resetForRun() {
+    this.lives = PLAYER_LIVES;
+    this.maxLives = PLAYER_MAX_LIVES;
+    this.resetPowerUps();
+    this.resetPosition();
+    this.invulnerable = 1.2;
+    this.hitCooldown = 0;
+    this.shootCooldown = 0;
+    this.input = { left: false, right: false, shoot: false, shootPressed: false };
+  }
+
+  get isAlive() {
+    return this.lives > 0;
   }
 
   get rect() {
@@ -77,6 +96,10 @@ class ServerPlayer {
     this.hitCooldown = Math.max(0, this.hitCooldown - dt);
     this.shootCooldown = Math.max(0, this.shootCooldown - dt);
     this.updatePowerUps(dt);
+    if (!this.isAlive) {
+      this.input.shootPressed = false;
+      return;
+    }
 
     const direction = (this.input.right ? 1 : 0) - (this.input.left ? 1 : 0);
     if (direction < 0) this.facing = "left";
@@ -104,11 +127,11 @@ class ServerPlayer {
   }
 
   wantsToShoot() {
-    return Boolean(this.input.shootPressed);
+    return this.isAlive && Boolean(this.input.shootPressed);
   }
 
   canShoot() {
-    return this.shootCooldown <= 0;
+    return this.isAlive && this.shootCooldown <= 0;
   }
 
   get maxProjectiles() {
@@ -125,9 +148,26 @@ class ServerPlayer {
 
   takeHit() {
     if (this.invulnerable > 0 || this.hitCooldown > 0) return false;
+    if (!this.loseLife()) return false;
     this.invulnerable = 1.7;
     this.hitCooldown = 0.3;
+    return true;
+  }
+
+  loseLife() {
+    if (!this.isAlive) return false;
+    this.lives = Math.max(0, this.lives - 1);
     this.resetPowerUps();
+    if (!this.isAlive) {
+      this.input = { left: false, right: false, shoot: false, shootPressed: false };
+      this.shootCooldown = 0;
+    }
+    return true;
+  }
+
+  heal(amount = 1) {
+    if (this.lives >= this.maxLives) return false;
+    this.lives = Math.min(this.maxLives, this.lives + amount);
     return true;
   }
 
@@ -158,6 +198,9 @@ class ServerPlayer {
       onGround: this.onGround,
       facing: this.facing,
       isShooting: this.shootCooldown > SHOOT_COOLDOWN - 0.12,
+      lives: this.lives,
+      maxLives: this.maxLives,
+      isAlive: this.isAlive,
       powerUps: { ...this.powerUps },
       invulnerable: this.invulnerable > 0,
       invulnerableTime: this.invulnerable,
